@@ -69,7 +69,7 @@ export default function JournalPage() {
         </div>
       </nav>
 
-      <main className="max-w-5xl mx-auto px-6 py-8">
+      <main id="main-content" className="max-w-5xl mx-auto px-6 py-8">
         {/* Tabs */}
         <div className="flex gap-2 mb-6">
           <button onClick={() => setActiveTab('journal')}
@@ -89,10 +89,10 @@ export default function JournalPage() {
               <h2 className="font-bold text-gray-900 mb-5">How are you feeling today?</h2>
               <form onSubmit={addEntry} className="space-y-5">
                 <div>
-                  <label className="label">Mood</label>
-                  <div className="flex gap-3 mt-1">
+                  <label className="label" id="mood-label">Mood</label>
+                  <div className="flex gap-3 mt-1" role="group" aria-labelledby="mood-label">
                     {[1, 2, 3, 4, 5].map(m => (
-                      <button key={m} type="button" onClick={() => setForm(p => ({ ...p, mood: m }))}
+                      <button key={m} type="button" aria-label={`Mood: ${MOOD_LABELS[m]}`} aria-pressed={form.mood === m} onClick={() => setForm(p => ({ ...p, mood: m }))}
                         className={`text-3xl transition-all cursor-pointer ${form.mood === m ? 'scale-125' : 'opacity-40 hover:opacity-70'}`}>
                         {MOOD_EMOJIS[m]}
                       </button>
@@ -101,8 +101,8 @@ export default function JournalPage() {
                   <p className="text-sm text-teal-600 font-medium mt-2">{MOOD_LABELS[form.mood]}</p>
                 </div>
                 <div>
-                  <label className="label">Energy Level: {energyStars(form.energy_level)}</label>
-                  <input type="range" min="1" max="5" value={form.energy_level}
+                  <label className="label" htmlFor="journal-energy">Energy Level: {energyStars(form.energy_level)}</label>
+                  <input id="journal-energy" type="range" min="1" max="5" value={form.energy_level}
                     onChange={e => setForm(p => ({ ...p, energy_level: parseInt(e.target.value) }))}
                     className="w-full accent-teal-600 mt-1" />
                   <div className="flex justify-between text-xs text-gray-400 mt-1">
@@ -110,13 +110,13 @@ export default function JournalPage() {
                   </div>
                 </div>
                 <div>
-                  <label className="label">Symptoms (if any)</label>
-                  <input className="input-field" placeholder="e.g. headache, dizziness, nausea"
+                  <label className="label" htmlFor="journal-symptoms">Symptoms (if any)</label>
+                  <input id="journal-symptoms" className="input-field" placeholder="e.g. headache, dizziness, nausea"
                     value={form.symptoms} onChange={e => setForm(p => ({ ...p, symptoms: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="label">Notes</label>
-                  <textarea className="input-field" rows={3} placeholder="Anything else you want to note..."
+                  <label className="label" htmlFor="journal-notes">Notes</label>
+                  <textarea id="journal-notes" className="input-field" rows={3} placeholder="Anything else you want to note..."
                     value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} />
                 </div>
                 <button type="submit" className="btn-primary w-full">Save Entry</button>

@@ -55,7 +55,7 @@ export default function VitalsPage() {
         </div>
       </nav>
 
-      <main className="max-w-5xl mx-auto px-6 py-8">
+      <main id="main-content" className="max-w-5xl mx-auto px-6 py-8">
         {/* Type tabs */}
         <div className="flex gap-2 flex-wrap mb-6">
           {VITAL_TYPES.map(vt => (
@@ -72,13 +72,13 @@ export default function VitalsPage() {
             <h2 className="font-bold text-gray-900 mb-4">Record {currentType.label}</h2>
             <form onSubmit={addVital} className="space-y-4">
               <div>
-                <label className="label">Value ({currentType.unit})</label>
-                <input type="number" step="0.1" className="input-field" required placeholder="Enter value"
+                <label className="label" htmlFor="vital-value">Value ({currentType.unit})</label>
+                <input id="vital-value" type="number" step="0.1" className="input-field" required placeholder="Enter value"
                   value={form.value} onChange={e => setForm(p => ({ ...p, value: e.target.value }))} />
               </div>
               <div>
-                <label className="label">Notes (optional)</label>
-                <input className="input-field" placeholder="e.g. After breakfast"
+                <label className="label" htmlFor="vital-notes">Notes (optional)</label>
+                <input id="vital-notes" className="input-field" placeholder="e.g. After breakfast"
                   value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} />
               </div>
               <button type="submit" className="btn-primary w-full">Record Reading</button>

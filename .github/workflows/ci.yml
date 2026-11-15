@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path backend/Cargo.toml -- --check
+      - name: Run Rust unit tests
+        run: cargo test --locked --manifest-path backend/Cargo.toml
+      - name: Install web dependencies
+        run: npm ci
+      - name: Type check web app
+        run: npx tsc --noEmit --incremental false
+      - name: Build web app
+        run: npm run build

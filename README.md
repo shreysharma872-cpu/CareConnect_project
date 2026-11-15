@@ -1,5 +1,7 @@
 # CareConnect
 
+[![CI](https://github.com/shreysharma872-cpu/Elderly.Help_project/actions/workflows/ci.yml/badge.svg)](https://github.com/shreysharma872-cpu/Elderly.Help_project/actions/workflows/ci.yml)
+
 CareConnect is an elderly care and medication management platform built with a Next.js web app, a Rust (Axum) API, and PostgreSQL. The API handles patient profiles, passcode sign-in, care-team access, medications, dose tracking, appointments, vitals, journal entries, caretaker notes, and adherence statistics.
 
 ## Run locally

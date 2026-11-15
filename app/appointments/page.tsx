@@ -73,39 +73,39 @@ export default function AppointmentsPage() {
         </div>
       </nav>
 
-      <main className="max-w-4xl mx-auto px-6 py-8">
+      <main id="main-content" className="max-w-4xl mx-auto px-6 py-8">
         {showForm && (
           <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
             onClick={e => e.target === e.currentTarget && setShowForm(false)}>
-            <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
+            <div role="dialog" aria-modal="true" aria-labelledby="appointment-dialog-title" className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
               <div className="p-6 border-b border-gray-100 flex justify-between items-center">
-                <h2 className="text-xl font-bold">Schedule Appointment</h2>
-                <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
+                <h2 id="appointment-dialog-title" className="text-xl font-bold">Schedule Appointment</h2>
+                <button type="button" aria-label="Close appointment form" onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
               </div>
               <form onSubmit={handleSubmit} className="p-6 space-y-4">
                 <div>
-                  <label className="label">Doctor Name *</label>
-                  <input className="input-field" required placeholder="e.g. Priya Sharma"
+                  <label className="label" htmlFor="appointment-doctor">Doctor Name *</label>
+                  <input id="appointment-doctor" className="input-field" required placeholder="e.g. Priya Sharma"
                     value={form.doctor_name} onChange={e => setForm(p => ({ ...p, doctor_name: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="label">Specialty</label>
-                  <input className="input-field" placeholder="e.g. Cardiologist, Neurologist"
+                  <label className="label" htmlFor="appointment-specialty">Specialty</label>
+                  <input id="appointment-specialty" className="input-field" placeholder="e.g. Cardiologist, Neurologist"
                     value={form.specialty} onChange={e => setForm(p => ({ ...p, specialty: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="label">Date &amp; Time *</label>
-                  <input type="datetime-local" className="input-field" required
+                  <label className="label" htmlFor="appointment-datetime">Date &amp; Time *</label>
+                  <input id="appointment-datetime" type="datetime-local" className="input-field" required
                     value={form.appointment_datetime} onChange={e => setForm(p => ({ ...p, appointment_datetime: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="label">Location / Clinic</label>
-                  <input className="input-field" placeholder="e.g. Apollo Hospital, Room 302"
+                  <label className="label" htmlFor="appointment-location">Location / Clinic</label>
+                  <input id="appointment-location" className="input-field" placeholder="e.g. Apollo Hospital, Room 302"
                     value={form.location} onChange={e => setForm(p => ({ ...p, location: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="label">Notes</label>
-                  <textarea className="input-field" rows={3} placeholder="Bring reports, fasting required, etc."
+                  <label className="label" htmlFor="appointment-notes">Notes</label>
+                  <textarea id="appointment-notes" className="input-field" rows={3} placeholder="Bring reports, fasting required, etc."
                     value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} />
                 </div>
                 <button type="submit" className="btn-primary w-full">Schedule Appointment</button>

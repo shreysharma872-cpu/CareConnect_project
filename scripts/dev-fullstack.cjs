@@ -22,21 +22,16 @@ const frontendScript = production ? 'start:next' : 'dev:next'
 const npmCli = process.env.npm_execpath
 const cargoEnv = {
   ...process.env,
-  CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR || join(root, 'target'),
+  CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR || join(isWindows ? (process.env.TEMP || root) : root, 'careconnect-cargo-target'),
   CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS || '2',
 }
 
 let stopping = false
 let frontend = null
+let backend = null
 let readinessTimer = null
 let readinessAttempts = 0
-
-const backend = spawn(cargo, ['run', ...(production ? ['--release'] : []), '--manifest-path', 'backend/Cargo.toml'], {
-  cwd: root,
-  stdio: 'inherit',
-  shell: false,
-  env: cargoEnv,
-})
+let reusedBackend = false
 
 function terminate(child) {
   if (!child || child.killed || child.exitCode !== null) return
@@ -59,7 +54,7 @@ function stop(code = 0) {
 
 function startFrontend() {
   if (stopping || frontend) return
-  console.log(`[CareConnect] Rust API and PostgreSQL are healthy at ${backendUrl}. Starting Next.js.`)
+  console.log(`[CareConnect] Rust API and PostgreSQL are healthy at ${backendUrl}${reusedBackend ? ' (reusing existing API)' : ''}. Starting Next.js.`)
   const command = npmCli ? process.execPath : (isWindows ? 'cmd.exe' : 'npm')
   const args = npmCli
     ? [npmCli, 'run', frontendScript]
@@ -68,7 +63,10 @@ function startFrontend() {
     cwd: root,
     stdio: 'inherit',
     shell: false,
-    env: process.env,
+    env: {
+      ...process.env,
+      CARECONNECT_NEXT_DIST_DIR: process.env.CARECONNECT_NEXT_DIST_DIR || (production ? '.next' : '.next-dev'),
+    },
   })
   frontend.on('error', error => {
     console.error('Next.js failed to start:', error.message)
@@ -82,6 +80,19 @@ function startFrontend() {
   })
 }
 
+async function startFrontendIfNeeded() {
+  const frontendPort = Number(process.env.PORT || 3000)
+  try {
+    const response = await fetch(`http://127.0.0.1:${frontendPort}/`, { signal: AbortSignal.timeout(1000) })
+    const html = await response.text()
+    if (response.ok && html.includes('CareConnect')) {
+      console.log(`[CareConnect] Website is already responding at http://localhost:${frontendPort}; reusing it.`)
+      return
+    }
+  } catch { /* No CareConnect web app is ready on the default port. */ }
+  startFrontend()
+}
+
 async function waitForBackend() {
   if (stopping || frontend) return
   readinessAttempts += 1
@@ -89,7 +100,7 @@ async function waitForBackend() {
     const response = await fetch(`${backendUrl}/api/health`, { signal: AbortSignal.timeout(1500) })
     const health = await response.json()
     if (response.ok && health?.status === 'ok' && health?.database === 'connected' && health?.backend === 'rust') {
-      startFrontend()
+      await startFrontendIfNeeded()
       return
     }
   } catch { /* Rust may still be compiling or creating the database. */ }
@@ -102,19 +113,44 @@ async function waitForBackend() {
   readinessTimer = setTimeout(waitForBackend, 1000)
 }
 
-backend.on('error', error => {
-  console.error(`Rust backend failed to start with Cargo at "${cargo}". Install Rust or set CARGO to cargo.exe:`, error.message)
-  stop(1)
-})
-backend.on('exit', code => {
-  if (!stopping) {
-    console.error(`Rust backend exited (${code ?? 'unknown'}). Check whether port ${backendPort} is already in use.`)
-    stop(code || 1)
-  }
-})
+function startBackend() {
+  if (stopping || backend) return
+  backend = spawn(cargo, ['run', ...(production ? ['--release'] : []), '--manifest-path', 'backend/Cargo.toml'], {
+    cwd: root,
+    stdio: 'inherit',
+    shell: false,
+    env: cargoEnv,
+  })
+  backend.on('error', error => {
+    console.error(`Rust backend failed to start with Cargo at "${cargo}". Install Rust or set CARGO to cargo.exe:`, error.message)
+    stop(1)
+  })
+  backend.on('exit', code => {
+    if (!stopping) {
+      console.error(`Rust backend exited (${code ?? 'unknown'}). Check whether port ${backendPort} is already in use.`)
+      stop(code || 1)
+    }
+  })
+}
+
+async function start() {
+  console.log(`[CareConnect] Checking Rust API at ${backendUrl}.`)
+  try {
+    const response = await fetch(`${backendUrl}/api/health`, { signal: AbortSignal.timeout(1000) })
+    const health = await response.json()
+    if (response.ok && health?.status === 'ok' && health?.database === 'connected' && health?.backend === 'rust') {
+      reusedBackend = true
+      await startFrontendIfNeeded()
+      return
+    }
+  } catch { /* No compatible API is running yet. */ }
+
+  console.log(`[CareConnect] Starting Rust API on port ${backendPort}; waiting for database health before starting Next.js.`)
+  startBackend()
+  void waitForBackend()
+}
 
 process.on('SIGINT', () => stop(0))
 process.on('SIGTERM', () => stop(0))
 
-console.log(`[CareConnect] Starting Rust API on port ${backendPort}; waiting for database health before starting Next.js.`)
-void waitForBackend()
+void start()

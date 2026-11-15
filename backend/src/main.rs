@@ -22,6 +22,7 @@ use std::cell::RefCell;
 use std::{
     env,
     path::Path,
+    sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::net::TcpListener;
@@ -275,6 +276,12 @@ fn valid_date(value: &str) -> bool {
 fn valid_time(value: &str) -> bool {
     NaiveTime::parse_from_str(value, "%H:%M").is_ok()
 }
+fn dummy_passcode_hash() -> &'static str {
+    static HASH: OnceLock<String> = OnceLock::new();
+    HASH.get_or_init(|| {
+        hash("CareConnect-dummy-passcode", DEFAULT_COST).expect("dummy bcrypt hash")
+    })
+}
 fn normalized_datetime(value: &str) -> Option<String> {
     if let Ok(datetime) = DateTime::parse_from_rfc3339(value) {
         return Some(
@@ -526,7 +533,8 @@ fn dispatch_sync(state: AppState, parts: axum::http::request::Parts, body: Vec<u
         let stored = match result {
             Ok(v) => v,
             Err(DbError::QueryReturnedNoRows) => {
-                return fail(StatusCode::UNAUTHORIZED, "Invalid patient ID or passcode")
+                let _ = verify(pass, dummy_passcode_hash());
+                return fail(StatusCode::UNAUTHORIZED, "Invalid patient ID or passcode");
             }
             Err(e) => return db_error(e),
         };
@@ -568,10 +576,10 @@ fn dispatch_sync(state: AppState, parts: axum::http::request::Parts, body: Vec<u
     if path == "patients" && method == "POST" {
         let name = text(&data, "name").trim();
         let pass = text(&data, "passcode");
-        if name.is_empty() || pass.len() < 4 || pass.len() > 128 {
+        if name.is_empty() || pass.len() < 8 || pass.len() > 72 {
             return fail(
                 StatusCode::BAD_REQUEST,
-                "Enter a name and a passcode between 4 and 128 characters",
+                "Enter a name and a passcode between 8 and 72 bytes",
             );
         }
         let id = patient_id();
@@ -1246,4 +1254,108 @@ fn dispatch_sync(state: AppState, parts: axum::http::request::Parts, body: Vec<u
         );
     }
     fail(StatusCode::NOT_FOUND, "API endpoint not found")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers_with_cookie(cookie: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, cookie.parse().unwrap());
+        headers
+    }
+
+    fn signed_cookie(subject: &str, expires: u64, secret: &str) -> String {
+        let payload = URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&json!({"sub":subject,"exp":expires})).unwrap());
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(payload.as_bytes());
+        format!(
+            "{payload}.{}",
+            URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+        )
+    }
+
+    #[test]
+    fn validates_iso_dates() {
+        assert!(valid_date("2026-11-15"));
+        assert!(!valid_date("2026-02-30"));
+    }
+
+    #[test]
+    fn validates_24_hour_times() {
+        assert!(valid_time("23:59"));
+        assert!(!valid_time("24:00"));
+    }
+
+    #[test]
+    fn postgres_sql_rewrites_numbered_parameters() {
+        assert_eq!(
+            postgres_sql("SELECT * WHERE id=?1 AND name=?12"),
+            "SELECT * WHERE id=$1 AND name=$12"
+        );
+    }
+
+    #[test]
+    fn accepts_valid_signed_session() {
+        let secret = "unit-test-secret";
+        let cookie = sign_session("PATIENT42", secret);
+        assert_eq!(
+            session_id(
+                &headers_with_cookie(&format!("careconnect_session={cookie}")),
+                secret
+            )
+            .as_deref(),
+            Some("PATIENT42")
+        );
+    }
+
+    #[test]
+    fn rejects_tampered_session() {
+        let secret = "unit-test-secret";
+        let cookie = signed_cookie("PATIENT42", now() + 60, secret);
+        let tampered = format!("{}x", cookie);
+        assert_eq!(
+            session_id(
+                &headers_with_cookie(&format!("careconnect_session={tampered}")),
+                secret
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_expired_session() {
+        let secret = "unit-test-secret";
+        let cookie = signed_cookie("PATIENT42", now().saturating_sub(1), secret);
+        assert_eq!(
+            session_id(
+                &headers_with_cookie(&format!("careconnect_session={cookie}")),
+                secret
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_session_signed_with_another_secret() {
+        let cookie = signed_cookie("PATIENT42", now() + 60, "first-secret");
+        assert_eq!(
+            session_id(
+                &headers_with_cookie(&format!("careconnect_session={cookie}")),
+                "second-secret"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn patient_ids_use_the_eight_character_safe_alphabet() {
+        let id = patient_id();
+        assert_eq!(id.len(), 8);
+        assert!(id
+            .chars()
+            .all(|ch| "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".contains(ch)));
+    }
 }

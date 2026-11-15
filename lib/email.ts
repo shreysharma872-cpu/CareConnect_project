@@ -6,6 +6,12 @@ interface EmailOptions {
   html: string
 }
 
+function escapeHtml(value: unknown): string {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[char]!)
+}
+
 export async function sendEmail(options: EmailOptions) {
   const recipients = Array.isArray(options.to) ? options.to : [options.to]
   if (process.env.RESEND_API_KEY) {
@@ -60,6 +66,7 @@ export function missedDoseEmailTemplate(params: {
   scheduledTime: string
   caretakerName?: string
 }) {
+  const e = escapeHtml
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
     body{font-family:'Segoe UI',Arial,sans-serif;background:#f8fafc;margin:0;padding:20px}
     .container{max-width:600px;margin:0 auto;background:white;border-radius:16px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.08)}
@@ -75,14 +82,14 @@ export function missedDoseEmailTemplate(params: {
   <div class="container">
     <div class="header"><h1>⚕️ CareConnect</h1><p>Medication Reminder Alert</p></div>
     <div class="body">
-      <p>Hello${params.caretakerName ? ` ${params.caretakerName}` : ''},</p>
-      <p><strong>${params.patientName}</strong> has missed a scheduled medication dose.</p>
+      <p>Hello${params.caretakerName ? ` ${e(params.caretakerName)}` : ''},</p>
+      <p><strong>${e(params.patientName)}</strong> has missed a scheduled medication dose.</p>
       <div class="alert-box"><h2>⚠️ Missed Dose Alert</h2><p>Please ensure the medication is taken as soon as possible.</p></div>
       <div>
-        <div class="row"><span class="lbl">Patient</span><span class="val">${params.patientName}</span></div>
-        <div class="row"><span class="lbl">Medication</span><span class="val">${params.medicationName}</span></div>
-        <div class="row"><span class="lbl">Dosage</span><span class="val">${params.dosage}</span></div>
-        <div class="row"><span class="lbl">Scheduled Time</span><span class="val">${params.scheduledTime}</span></div>
+        <div class="row"><span class="lbl">Patient</span><span class="val">${e(params.patientName)}</span></div>
+        <div class="row"><span class="lbl">Medication</span><span class="val">${e(params.medicationName)}</span></div>
+        <div class="row"><span class="lbl">Dosage</span><span class="val">${e(params.dosage)}</span></div>
+        <div class="row"><span class="lbl">Scheduled Time</span><span class="val">${e(params.scheduledTime)}</span></div>
       </div>
       <center><a href="${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}" class="btn">View Dashboard</a></center>
     </div>
@@ -91,7 +98,8 @@ export function missedDoseEmailTemplate(params: {
 }
 
 export function upcomingDoseEmailTemplate(params: { patientName: string; medicationName: string; dosage: string; scheduledTime: string }) {
-  return `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#f8fafc;padding:24px;color:#0f172a"><div style="max-width:560px;margin:auto;background:#fff;border-radius:16px;padding:28px;border:1px solid #e2e8f0"><h1 style="color:#0f766e">CareConnect dose reminder</h1><p>Hello ${params.patientName},</p><p>It is almost time for your medication.</p><div style="background:#f0fdfa;padding:18px;border-radius:12px"><strong>${params.medicationName}</strong><br/>${params.dosage}<br/>Scheduled for ${params.scheduledTime}</div><p style="color:#64748b;font-size:13px">Please follow the instructions provided by your healthcare professional.</p></div></body></html>`
+  const e = escapeHtml
+  return `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#f8fafc;padding:24px;color:#0f172a"><div style="max-width:560px;margin:auto;background:#fff;border-radius:16px;padding:28px;border:1px solid #e2e8f0"><h1 style="color:#0f766e">CareConnect dose reminder</h1><p>Hello ${e(params.patientName)},</p><p>It is almost time for your medication.</p><div style="background:#f0fdfa;padding:18px;border-radius:12px"><strong>${e(params.medicationName)}</strong><br/>${e(params.dosage)}<br/>Scheduled for ${e(params.scheduledTime)}</div><p style="color:#64748b;font-size:13px">Please follow the instructions provided by your healthcare professional.</p></div></body></html>`
 }
 
 export function appointmentReminderEmailTemplate(params: {
@@ -102,6 +110,7 @@ export function appointmentReminderEmailTemplate(params: {
   location: string
   hoursUntil: number
 }) {
+  const e = escapeHtml
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
     body{font-family:'Segoe UI',Arial,sans-serif;background:#f8fafc;margin:0;padding:20px}
     .container{max-width:600px;margin:0 auto;background:white;border-radius:16px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.08)}
@@ -116,13 +125,13 @@ export function appointmentReminderEmailTemplate(params: {
   <div class="container">
     <div class="header"><h1>⚕️ CareConnect</h1><p>Appointment Reminder</p></div>
     <div class="body">
-      <p><strong>${params.patientName}</strong> has a doctor's appointment in <strong>${params.hoursUntil} hour${params.hoursUntil !== 1 ? 's' : ''}</strong>.</p>
+      <p><strong>${e(params.patientName)}</strong> has a doctor's appointment in <strong>${params.hoursUntil} hour${params.hoursUntil !== 1 ? 's' : ''}</strong>.</p>
       <div class="appt-box"><p style="margin:0;color:#1d4ed8;font-weight:600">📅 Upcoming Appointment</p></div>
       <div>
-        <div class="row"><span class="lbl">Doctor</span><span class="val">Dr. ${params.doctorName}</span></div>
-        <div class="row"><span class="lbl">Specialty</span><span class="val">${params.specialty || 'General'}</span></div>
-        <div class="row"><span class="lbl">Date &amp; Time</span><span class="val">${params.appointmentDateTime}</span></div>
-        <div class="row"><span class="lbl">Location</span><span class="val">${params.location || 'To be confirmed'}</span></div>
+        <div class="row"><span class="lbl">Doctor</span><span class="val">Dr. ${e(params.doctorName)}</span></div>
+        <div class="row"><span class="lbl">Specialty</span><span class="val">${e(params.specialty || 'General')}</span></div>
+        <div class="row"><span class="lbl">Date &amp; Time</span><span class="val">${e(params.appointmentDateTime)}</span></div>
+        <div class="row"><span class="lbl">Location</span><span class="val">${e(params.location || 'To be confirmed')}</span></div>
       </div>
       <center><a href="${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}" class="btn">View Appointment</a></center>
     </div>

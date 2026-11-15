@@ -88,38 +88,38 @@ export default function MedicationsPage() {
         </div>
       </nav>
 
-      <main className="max-w-5xl mx-auto px-6 py-8">
+      <main id="main-content" className="max-w-5xl mx-auto px-6 py-8">
         {/* Modal */}
         {showForm && (
           <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
             onClick={e => e.target === e.currentTarget && setShowForm(false)}>
-            <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div role="dialog" aria-modal="true" aria-labelledby="medication-dialog-title" className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
               <div className="p-6 border-b border-gray-100 flex justify-between items-center">
-                <h2 className="text-xl font-bold text-gray-900">Add Medication</h2>
-                <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
+                <h2 id="medication-dialog-title" className="text-xl font-bold text-gray-900">Add Medication</h2>
+                <button type="button" aria-label="Close medication form" onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
               </div>
               <form onSubmit={handleSubmit} className="p-6 space-y-5">
                 <div>
-                  <label className="label">Medication Name *</label>
-                  <input className="input-field" required placeholder="e.g. Metformin"
+                  <label className="label" htmlFor="medication-name">Medication Name *</label>
+                  <input id="medication-name" className="input-field" required placeholder="e.g. Metformin"
                     value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="label">Dosage *</label>
-                    <input className="input-field" required type="number" placeholder="500"
+                    <label className="label" htmlFor="medication-dosage">Dosage *</label>
+                    <input id="medication-dosage" className="input-field" required type="number" placeholder="500"
                       value={form.dosage} onChange={e => setForm(p => ({ ...p, dosage: e.target.value }))} />
                   </div>
                   <div>
-                    <label className="label">Unit</label>
-                    <select className="input-field" value={form.dosage_unit} onChange={e => setForm(p => ({ ...p, dosage_unit: e.target.value }))}>
+                    <label className="label" htmlFor="medication-unit">Unit</label>
+                    <select id="medication-unit" className="input-field" value={form.dosage_unit} onChange={e => setForm(p => ({ ...p, dosage_unit: e.target.value }))}>
                       {units.map(u => <option key={u}>{u}</option>)}
                     </select>
                   </div>
                 </div>
                 <div>
-                  <label className="label">Frequency *</label>
-                  <select className="input-field" value={form.frequency} onChange={e => updateFrequency(e.target.value)}>
+                  <label className="label" htmlFor="medication-frequency">Frequency *</label>
+                  <select id="medication-frequency" className="input-field" value={form.frequency} onChange={e => updateFrequency(e.target.value)}>
                     {FREQUENCIES.map(f => <option key={f}>{f}</option>)}
                   </select>
                 </div>
@@ -127,10 +127,10 @@ export default function MedicationsPage() {
                   <p className="text-sm text-gray-500 bg-blue-50 rounded-xl p-3">As-needed medicines won&apos;t create scheduled doses or reminders. Follow the prescription instructions.</p>
                 ) : (
                   <div>
-                    <label className="label">{form.frequency === 'Weekly' ? 'Weekly dose time' : 'Schedule Times'}</label>
+                    <span className="label" id="medication-times-label">{form.frequency === 'Weekly' ? 'Weekly dose time' : 'Schedule Times'}</span>
                     {form.frequency === 'Weekly' && <p className="text-xs text-gray-500 mb-2">Repeats on the weekday of the start date.</p>}
                     {form.times.map((time, i) => (
-                      <input key={i} type="time" className="input-field mb-2" value={time}
+                      <input key={i} aria-label={`Dose time ${i + 1}`} type="time" className="input-field mb-2" value={time}
                         onChange={e => { const t = [...form.times]; t[i] = e.target.value; setForm(p => ({ ...p, times: t })) }} />
                     ))}
                   </div>
@@ -142,13 +142,13 @@ export default function MedicationsPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="label">Start Date *</label>
-                    <input type="date" className="input-field" required value={form.start_date}
+                    <label className="label" htmlFor="medication-start">Start Date *</label>
+                    <input id="medication-start" type="date" className="input-field" required value={form.start_date}
                       onChange={e => setForm(p => ({ ...p, start_date: e.target.value }))} />
                   </div>
                   <div>
-                    <label className="label">End Date</label>
-                    <input type="date" className="input-field" value={form.end_date}
+                    <label className="label" htmlFor="medication-end">End Date</label>
+                    <input id="medication-end" type="date" className="input-field" value={form.end_date}
                       onChange={e => setForm(p => ({ ...p, end_date: e.target.value }))} />
                   </div>
                 </div>
@@ -156,15 +156,15 @@ export default function MedicationsPage() {
                   <label className="label">Color Label</label>
                   <div className="flex gap-2 flex-wrap mt-1">
                     {MEDICATION_COLORS.map(c => (
-                      <button key={c} type="button" onClick={() => setForm(p => ({ ...p, color: c }))}
+                      <button key={c} type="button" aria-label={`Choose color ${c}`} aria-pressed={form.color === c} onClick={() => setForm(p => ({ ...p, color: c }))}
                         className={`w-8 h-8 rounded-full border-2 transition-all ${form.color === c ? 'border-gray-800 scale-110' : 'border-transparent'}`}
                         style={{ backgroundColor: c }} />
                     ))}
                   </div>
                 </div>
                 <div>
-                  <label className="label">Notes</label>
-                  <textarea className="input-field" rows={2} placeholder="Any special instructions..."
+                  <label className="label" htmlFor="medication-notes">Notes</label>
+                  <textarea id="medication-notes" className="input-field" rows={2} placeholder="Any special instructions..."
                     value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} />
                 </div>
                 <button type="submit" className="btn-primary w-full">Add Medication</button>

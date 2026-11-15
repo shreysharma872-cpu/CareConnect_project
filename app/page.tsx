@@ -10,6 +10,8 @@ export default function HomePage() {
   const [passcode, setPasscode] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [createdPatientId, setCreatedPatientId] = useState('')
+  const [copiedPatientId, setCopiedPatientId] = useState(false)
   const [regForm, setRegForm] = useState({
     name: '', dob: '', blood_group: '', passcode: '', confirmPasscode: '',
     email: '', phone: '', emergency_contact_name: '', emergency_contact_phone: '',
@@ -29,7 +31,7 @@ export default function HomePage() {
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error || 'Login failed'); return }
-      localStorage.setItem('patient', JSON.stringify(data.patient))
+      localStorage.setItem('patient', JSON.stringify({ id: data.patient.id, name: data.patient.name }))
       router.replace('/dashboard')
     } catch (error) {
       setError(controller.signal.aborted
@@ -44,7 +46,7 @@ export default function HomePage() {
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault()
     if (regForm.passcode !== regForm.confirmPasscode) { setError('Passcodes do not match'); return }
-    if (regForm.passcode.length < 4) { setError('Passcode must be at least 4 characters'); return }
+    if (regForm.passcode.length < 8) { setError('Passcode must be at least 8 characters'); return }
     setError(''); setLoading(true)
     const controller = new AbortController()
     const timeout = window.setTimeout(() => controller.abort(), 15000)
@@ -56,7 +58,8 @@ export default function HomePage() {
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error || 'Registration failed'); return }
-      alert(`Profile created!\n\nYour Patient ID is: ${data.id}\n\nPlease save this ID — you need it to log in and to share access with family/caretakers.`)
+      setCreatedPatientId(data.id)
+      setCopiedPatientId(false)
       setPatientId(data.id)
       setMode('login')
     } catch {
@@ -87,7 +90,7 @@ export default function HomePage() {
         </div>
         <button onClick={() => setMode('login')} className="btn-primary text-sm px-5 py-2.5">Sign In</button>
       </header>
-      <main className="flex-1 flex flex-col items-center justify-center text-center px-6 py-20">
+      <main id="main-content" className="flex-1 flex flex-col items-center justify-center text-center px-6 py-20">
         <div className="inline-flex items-center gap-2 bg-teal-100 text-teal-700 px-4 py-2 rounded-full text-sm font-semibold mb-6">
           <span>✨</span> Smart Elderly Care Platform
         </div>
@@ -120,7 +123,7 @@ export default function HomePage() {
   )
 
   if (mode === 'login') return (
-    <div className="min-h-screen bg-gradient-to-br from-teal-50 via-white to-green-50 flex items-center justify-center p-6">
+    <div id="main-content" tabIndex={-1} className="min-h-screen bg-gradient-to-br from-teal-50 via-white to-green-50 flex items-center justify-center p-6">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <div className="w-16 h-16 bg-teal-600 rounded-2xl flex items-center justify-center text-white text-3xl mx-auto mb-4">⚕️</div>
@@ -128,20 +131,29 @@ export default function HomePage() {
           <p className="text-gray-600 mt-2">Sign in to your CareConnect profile</p>
         </div>
         <div className="card">
+          {createdPatientId && <div role="status" className="mb-5 rounded-xl border border-teal-200 bg-teal-50 p-4 text-left">
+            <p className="font-semibold text-teal-900">Profile created. Save your Patient ID to sign in.</p>
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <strong className="font-mono text-xl tracking-widest text-teal-950">{createdPatientId}</strong>
+              <button type="button" className="btn-secondary px-4 py-2" onClick={async () => {
+                try { await navigator.clipboard.writeText(createdPatientId); setCopiedPatientId(true) } catch { setCopiedPatientId(false) }
+              }}>{copiedPatientId ? 'Copied' : 'Copy ID'}</button>
+            </div>
+          </div>}
           <form onSubmit={handleLogin} className="space-y-5">
             <div>
-              <label className="label">Patient ID</label>
-              <input type="text" value={patientId} onChange={e => setPatientId(e.target.value.toUpperCase())}
+              <label className="label" htmlFor="login-patient-id">Patient ID</label>
+              <input id="login-patient-id" autoComplete="username" type="text" value={patientId} onChange={e => setPatientId(e.target.value.toUpperCase())}
                 placeholder="e.g. AB3K9MX2" className="input-field font-mono tracking-widest text-center text-xl"
                 required maxLength={8} />
               <p className="text-xs text-gray-500 mt-1 text-center">Your 8-character Patient ID</p>
             </div>
             <div>
-              <label className="label">Passcode</label>
-              <input type="password" value={passcode} onChange={e => setPasscode(e.target.value)}
+              <label className="label" htmlFor="login-passcode">Passcode</label>
+              <input id="login-passcode" autoComplete="current-password" type="password" value={passcode} onChange={e => setPasscode(e.target.value)}
                 placeholder="Enter your passcode" className="input-field" required />
             </div>
-            {error && <div className="bg-red-50 text-red-700 px-4 py-3 rounded-xl text-sm font-medium">{error}</div>}
+            {error && <div role="alert" className="bg-red-50 text-red-800 px-4 py-3 rounded-xl font-medium">{error}</div>}
             <button type="submit" disabled={loading} className="btn-primary w-full text-lg">
               {loading ? 'Signing in...' : 'Sign In →'}
             </button>
@@ -163,7 +175,7 @@ export default function HomePage() {
   // Register mode
   const bloodGroups = ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-']
   return (
-    <div className="min-h-screen bg-gradient-to-br from-teal-50 via-white to-green-50 py-12 px-6">
+    <div id="main-content" tabIndex={-1} className="min-h-screen bg-gradient-to-br from-teal-50 via-white to-green-50 py-12 px-6">
       <div className="max-w-2xl mx-auto">
         <div className="text-center mb-8">
           <div className="w-16 h-16 bg-teal-600 rounded-2xl flex items-center justify-center text-white text-3xl mx-auto mb-4">⚕️</div>
@@ -176,28 +188,28 @@ export default function HomePage() {
               <h2 className="text-lg font-bold text-gray-900 mb-4 pb-2 border-b border-gray-100">Personal Information</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="md:col-span-2">
-                  <label className="label">Full Name *</label>
-                  <input type="text" className="input-field" placeholder="e.g. Ramesh Sharma" required
+                  <label className="label" htmlFor="register-name">Full Name *</label>
+                  <input id="register-name" type="text" className="input-field" placeholder="e.g. Ramesh Sharma" required
                     value={regForm.name} onChange={e => setRegForm(p => ({ ...p, name: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="label">Date of Birth</label>
-                  <input type="date" className="input-field" value={regForm.dob} onChange={e => setRegForm(p => ({ ...p, dob: e.target.value }))} />
+                  <label className="label" htmlFor="register-dob">Date of Birth</label>
+                  <input id="register-dob" type="date" className="input-field" value={regForm.dob} onChange={e => setRegForm(p => ({ ...p, dob: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="label">Blood Group</label>
-                  <select className="input-field" value={regForm.blood_group} onChange={e => setRegForm(p => ({ ...p, blood_group: e.target.value }))}>
+                  <label className="label" htmlFor="register-blood-group">Blood Group</label>
+                  <select id="register-blood-group" className="input-field" value={regForm.blood_group} onChange={e => setRegForm(p => ({ ...p, blood_group: e.target.value }))}>
                     <option value="">Select...</option>
                     {bloodGroups.map(bg => <option key={bg}>{bg}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="label">Email Address</label>
-                  <input type="email" className="input-field" placeholder="For reminders" value={regForm.email} onChange={e => setRegForm(p => ({ ...p, email: e.target.value }))} />
+                  <label className="label" htmlFor="register-email">Email Address</label>
+                  <input id="register-email" type="email" className="input-field" placeholder="For reminders" value={regForm.email} onChange={e => setRegForm(p => ({ ...p, email: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="label">Phone Number</label>
-                  <input type="tel" className="input-field" placeholder="+91 98765 43210" value={regForm.phone} onChange={e => setRegForm(p => ({ ...p, phone: e.target.value }))} />
+                  <label className="label" htmlFor="register-phone">Phone Number</label>
+                  <input id="register-phone" type="tel" className="input-field" placeholder="+91 98765 43210" value={regForm.phone} onChange={e => setRegForm(p => ({ ...p, phone: e.target.value }))} />
                 </div>
               </div>
             </div>
@@ -205,16 +217,16 @@ export default function HomePage() {
               <h2 className="text-lg font-bold text-gray-900 mb-4 pb-2 border-b border-gray-100">Emergency Contact</h2>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label className="label">Name</label>
-                  <input type="text" className="input-field" placeholder="Contact name" value={regForm.emergency_contact_name} onChange={e => setRegForm(p => ({ ...p, emergency_contact_name: e.target.value }))} />
+                  <label className="label" htmlFor="emergency-name">Name</label>
+                  <input id="emergency-name" type="text" className="input-field" placeholder="Contact name" value={regForm.emergency_contact_name} onChange={e => setRegForm(p => ({ ...p, emergency_contact_name: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="label">Phone</label>
-                  <input type="tel" className="input-field" placeholder="Phone number" value={regForm.emergency_contact_phone} onChange={e => setRegForm(p => ({ ...p, emergency_contact_phone: e.target.value }))} />
+                  <label className="label" htmlFor="emergency-phone">Phone</label>
+                  <input id="emergency-phone" type="tel" className="input-field" placeholder="Phone number" value={regForm.emergency_contact_phone} onChange={e => setRegForm(p => ({ ...p, emergency_contact_phone: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="label">Relation</label>
-                  <input type="text" className="input-field" placeholder="e.g. Son, Daughter" value={regForm.emergency_contact_relation} onChange={e => setRegForm(p => ({ ...p, emergency_contact_relation: e.target.value }))} />
+                  <label className="label" htmlFor="emergency-relation">Relation</label>
+                  <input id="emergency-relation" type="text" className="input-field" placeholder="e.g. Son, Daughter" value={regForm.emergency_contact_relation} onChange={e => setRegForm(p => ({ ...p, emergency_contact_relation: e.target.value }))} />
                 </div>
               </div>
             </div>
@@ -222,12 +234,12 @@ export default function HomePage() {
               <h2 className="text-lg font-bold text-gray-900 mb-4 pb-2 border-b border-gray-100">Medical Info</h2>
               <div className="space-y-4">
                 <div>
-                  <label className="label">Known Allergies</label>
-                  <input type="text" className="input-field" placeholder="e.g. Penicillin, Aspirin" value={regForm.allergies} onChange={e => setRegForm(p => ({ ...p, allergies: e.target.value }))} />
+                  <label className="label" htmlFor="register-allergies">Known Allergies</label>
+                  <input id="register-allergies" type="text" className="input-field" placeholder="e.g. Penicillin, Aspirin" value={regForm.allergies} onChange={e => setRegForm(p => ({ ...p, allergies: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="label">Medical Conditions</label>
-                  <input type="text" className="input-field" placeholder="e.g. Diabetes, Hypertension" value={regForm.medical_conditions} onChange={e => setRegForm(p => ({ ...p, medical_conditions: e.target.value }))} />
+                  <label className="label" htmlFor="register-conditions">Medical Conditions</label>
+                  <input id="register-conditions" type="text" className="input-field" placeholder="e.g. Diabetes, Hypertension" value={regForm.medical_conditions} onChange={e => setRegForm(p => ({ ...p, medical_conditions: e.target.value }))} />
                 </div>
               </div>
             </div>
@@ -235,19 +247,19 @@ export default function HomePage() {
               <h2 className="text-lg font-bold text-gray-900 mb-4 pb-2 border-b border-gray-100">Secure Access</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="label">Passcode *</label>
-                  <input type="password" className="input-field" placeholder="Min 4 characters" required minLength={4}
+                  <label className="label" htmlFor="register-passcode">Passcode *</label>
+                  <input id="register-passcode" autoComplete="new-password" type="password" className="input-field" placeholder="At least 8 characters" required minLength={8}
                     value={regForm.passcode} onChange={e => setRegForm(p => ({ ...p, passcode: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="label">Confirm Passcode *</label>
-                  <input type="password" className="input-field" placeholder="Repeat passcode" required
+                  <label className="label" htmlFor="register-confirm-passcode">Confirm Passcode *</label>
+                  <input id="register-confirm-passcode" autoComplete="new-password" type="password" className="input-field" placeholder="Repeat passcode" required minLength={8}
                     value={regForm.confirmPasscode} onChange={e => setRegForm(p => ({ ...p, confirmPasscode: e.target.value }))} />
                 </div>
               </div>
               <p className="text-xs text-gray-500 mt-2">Share this passcode with trusted caretakers and family members</p>
             </div>
-            {error && <div className="bg-red-50 text-red-700 px-4 py-3 rounded-xl text-sm font-medium">{error}</div>}
+            {error && <div role="alert" className="bg-red-50 text-red-800 px-4 py-3 rounded-xl font-medium">{error}</div>}
             <button type="submit" disabled={loading} className="btn-primary w-full text-lg">
               {loading ? 'Creating Profile...' : 'Create Patient Profile →'}
             </button>
