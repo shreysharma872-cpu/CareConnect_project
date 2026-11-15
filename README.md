@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # CareConnect — Elderly Care & Medication Management Platform
 
 > PromptWars x Catalyst | Build with AI
@@ -122,3 +123,7 @@ Sign-in creates a seven-day, signed, HTTP-only session cookie. Production must s
 - **Database**: Local SQLite via `@libsql/client` (zero setup)
 - **Email**: Nodemailer + Gmail SMTP
 - **Auth**: bcrypt passcode hashing
+=======
+# Elderly.Help_project
+project made for the betterment of the society, helping the society
+>>>>>>> f03308de75639c7a76c3291c3d8e4034564d68f2
