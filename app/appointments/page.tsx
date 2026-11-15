@@ -1,4 +1,5 @@
 'use client'
+import { apiFetch } from '@/lib/api-client'
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
@@ -28,14 +29,14 @@ export default function AppointmentsPage() {
 
   async function fetchAppointments(patientId: string) {
     setLoading(true)
-    const res = await fetch(`/api/appointments?patientId=${patientId}`)
+    const res = await apiFetch(`/api/appointments?patientId=${patientId}`)
     if (res.ok) setAppointments(await res.json())
     setLoading(false)
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    const res = await fetch('/api/appointments', {
+    const res = await apiFetch('/api/appointments', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...form, patient_id: patient.id }),
     })
@@ -48,7 +49,7 @@ export default function AppointmentsPage() {
 
   async function cancelAppointment(id: string) {
     if (!confirm('Cancel this appointment?')) return
-    await fetch(`/api/appointments?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+    await apiFetch(`/api/appointments?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
     fetchAppointments(patient?.id)
   }
 

@@ -6,6 +6,7 @@
     "dev": "node scripts/dev-fullstack.cjs",
     "dev:next": "next dev",
     "build": "next build",
+    "build:static": "node scripts/build-static.cjs",
     "build:fullstack": "cargo build --release --manifest-path backend/Cargo.toml && next build",
     "start": "next start",
     "start:next": "next start",

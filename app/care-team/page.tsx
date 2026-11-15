@@ -1,4 +1,5 @@
 'use client'
+import { apiFetch } from '@/lib/api-client'
 
 import { FormEvent, useEffect, useState } from 'react'
 import Link from 'next/link'
@@ -29,7 +30,7 @@ export default function CareTeamPage() {
   async function fetchMembers(patientId: string) {
     setLoading(true)
     try {
-      const response = await fetch(`/api/care-team?patientId=${encodeURIComponent(patientId)}`)
+      const response = await apiFetch(`/api/care-team?patientId=${encodeURIComponent(patientId)}`)
       if (response.status === 401) { localStorage.removeItem('patient'); router.push('/'); return }
       if (!response.ok) throw new Error('Unable to load your care team.')
       setMembers(await response.json())
@@ -41,7 +42,7 @@ export default function CareTeamPage() {
     event.preventDefault()
     setError(''); setNotice(''); setSaving(true)
     try {
-      const response = await fetch('/api/care-team', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
+      const response = await apiFetch('/api/care-team', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'Unable to add this person.')
       setForm({ name: '', email: '', role: 'family' })
@@ -55,7 +56,7 @@ export default function CareTeamPage() {
     if (!confirm(`Remove ${member.name} from your care team? They will stop receiving reminders.`)) return
     setError(''); setNotice('')
     try {
-      const response = await fetch(`/api/care-team?id=${encodeURIComponent(member.id)}`, { method: 'DELETE' })
+      const response = await apiFetch(`/api/care-team?id=${encodeURIComponent(member.id)}`, { method: 'DELETE' })
       if (!response.ok) throw new Error('Unable to remove this person.')
       setMembers(current => current.filter(item => item.id !== member.id))
       setNotice(`${member.name} was removed from your care team.`)

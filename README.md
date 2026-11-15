@@ -2,36 +2,86 @@
 
 [![CI](https://github.com/shreysharma872-cpu/Elderly.Help_project/actions/workflows/ci.yml/badge.svg)](https://github.com/shreysharma872-cpu/Elderly.Help_project/actions/workflows/ci.yml)
 
-CareConnect is an elderly care and medication management platform built with a Next.js web app, a Rust (Axum) API, and PostgreSQL. The API handles patient profiles, passcode sign-in, care-team access, medications, dose tracking, appointments, vitals, journal entries, caretaker notes, and adherence statistics.
+CareConnect is an elderly care and medication management platform built with a Next.js frontend, Rust (Axum) API, and PostgreSQL. Patients and their care teams can share medication schedules, dose tracking, appointments, vitals, journal entries, and caretaker notes.
+
+## Features
+
+- Patient profiles and passcode sign-in (bcrypt password hashes and signed, HTTP-only session cookies).
+- Shared care-team access to medication schedules, dose adherence, appointments, vitals, journal entries, and caretaker notes.
+- Adherence statistics and appointment overview.
+- Responsive interface with senior-friendly typography and accessibility features.
+
+## Stack and layout
+
+| Layer | Technology |
+| --- | --- |
+| Frontend | Next.js 15, React, TypeScript, Tailwind CSS |
+| API | Rust, Axum, Tokio |
+| Database | PostgreSQL |
+| Deployment | Render Blueprint (`render.yaml`) |
+
+`app/` contains the web pages, `backend/` contains the API and PostgreSQL schema setup, and `scripts/` contains local launch/build helpers. The Render static build publishes the generated `out/` directory.
 
 ## Run locally
 
-### Requirements
+Requirements: Node.js 18+, npm, Rust/Cargo, and a running PostgreSQL database.
 
-- Node.js 18 or newer and npm
-- Rust and Cargo
-- PostgreSQL 14 or newer, running locally or hosted
+1. Create a PostgreSQL database named `careconnect`.
+2. Copy `.env.example` to `.env.local` and set `DATABASE_URL`, for example:
 
-Install the npm dependencies and create a PostgreSQL database named `careconnect`. Copy `.env.example` to `.env.local`, then set `DATABASE_URL` to your PostgreSQL connection string. For example:
+   ```env
+   DATABASE_URL=postgres://postgres:your-password@localhost:5432/careconnect
+   SESSION_SECRET=replace-with-a-long-random-secret
+   ```
 
-```env
-DATABASE_URL=postgres://postgres:your-password@localhost:5432/careconnect
-```
+3. Install packages and start the API and website together:
 
-Start both the Rust API and Next.js with one command:
+   ```powershell
+   npm install
+   npm run dev
+   ```
+
+The launcher starts Rust on port 4000, waits for `/api/health`, then starts Next.js (usually at `http://localhost:3000`). Stop both with Ctrl+C. If Cargo is not recognized after Rust installation, reopen the terminal or add `%USERPROFILE%\.cargo\bin` to PATH.
+
+To create and preview the static site locally, first build it, then serve `out/` with any static file server. Set `NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:4000` while building (the build script uses this default) and keep the Rust API and PostgreSQL running. Static builds do not include a Next.js server.
+
+## Build commands
 
 ```powershell
-npm install
-npm run dev
+npm run build:static       # Next.js static export to ./out
+npm run build              # Next.js server build
+npm run build:fullstack    # Rust release build and Next.js server build
+npm run start:fullstack    # Run Rust API and Next.js server together
 ```
 
-Open the URL printed by Next.js, usually `http://localhost:3000`. The launcher starts the Rust backend on port 4000, waits for its PostgreSQL health check, then starts the website. Keep the terminal open; `Ctrl+C` stops both. Rust initializes the PostgreSQL tables and indexes on startup. The API health endpoint is `http://127.0.0.1:4000/api/health`.
+## Deploy to Render
 
-If `cargo` is not recognized after installing Rust, restart PowerShell or add `%USERPROFILE%\.cargo\bin` to PATH. The first build downloads and compiles Rust crates.
+The root `render.yaml` defines a Rust API web service, a static site, and PostgreSQL. Render builds the frontend with `npm run build:static` and publishes `./out`. The build receives the API's public Render URL, while the API receives the static site's allowed origin for credentialed CORS requests.
 
-## Move existing SQLite data
+1. Push the repository to GitHub.
+2. In Render, create a Blueprint and select the repository containing `render.yaml`.
+3. Review the proposed Rust API, static site, and database, then apply the Blueprint.
 
-The old `elderly_care.db` file is retained as a migration source. It is not used by the application. First start the Rust API once with the target PostgreSQL `DATABASE_URL` so it creates the schema. Then, from the project folder, run:
+The frontend and API use separate Render origins, so production sessions use secure cross-origin cookies. The Blueprint configures CORS for `https://careconnect-web.onrender.com`, sets security headers, and redirects page URLs to the trailing-slash paths generated by Next.js. If you rename the static service or use a custom frontend domain, update `CORS_ALLOWED_ORIGINS` on the API service in Render to match the frontend origin.
+
+Render's free Rust service sleeps after inactivity, so its first request can be slow. Free PostgreSQL instances have storage and retention limits; check Render's current limits and keep backups. Transactional email reminders are not enabled in this static frontend/API Blueprint; the current Rust reminder endpoint is a placeholder and returns zero processed reminders.
+
+## Environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `SESSION_SECRET` | Signs session cookies; required in production |
+| `RUST_BACKEND_PORT`, `RUST_BACKEND_URL` | Local API port and URL |
+| `NEXT_PUBLIC_API_BASE_URL` | API origin embedded in static builds; Render sets this automatically |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated exact browser origins permitted by the API |
+| `CRON_SECRET` | Secret for the placeholder reminder endpoint |
+
+Never commit `.env.local`, database credentials, or patient data.
+
+## Migrating from SQLite
+
+An older version used `elderly_care.db`. To migrate local data, start the Rust API once so it creates the PostgreSQL schema, then run:
 
 ```powershell
 $env:POSTGRES_DATABASE_URL = "postgres://postgres:your-password@localhost:5432/careconnect"
@@ -39,34 +89,4 @@ $env:SQLITE_PATH = ".\elderly_care.db"
 node .\scripts\migrate-sqlite-to-postgres.mjs
 ```
 
-For a hosted PostgreSQL database, use its external connection string as `POSTGRES_DATABASE_URL` (Render external URLs require SSL, usually by appending `?sslmode=require`). The migration preserves IDs, copies tables in foreign-key order, skips duplicate IDs, and rolls back all inserts if it fails. It prints row counts only, not patient data. Verify the records in the app before archiving or deleting the SQLite database and its `-wal`/`-shm` companions.
-
-## Deploy to Render
-
-The root `render.yaml` is a Render Blueprint for two free services (Rust API and Next.js web app) plus a free PostgreSQL database. Push the project to a Git repository, create a new Blueprint in Render, and select that repository. Render builds each service and wires its internal database and API address automatically. The Rust API binds to Render's `PORT` on `0.0.0.0`; the web service proxies `/api/*` calls to it.
-
-Set `RESEND_API_KEY` on the `careconnect-web` service for real email. Resend uses HTTPS, which works from Render's free services; configure a verified sender and set `EMAIL_FROM`. Gmail SMTP is only a local fallback. For scheduled reminders, call `POST https://<your-web-service>/api/reminders/send` with `Authorization: Bearer <CRON_SECRET>` from an external scheduler. The in-app scheduler stays disabled in the Blueprint so it does not keep a free instance busy.
-
-Render's free tier has limits that matter for a demo: free web services sleep after inactivity, so the first visit can take time to wake up; free PostgreSQL is limited to 1 GB and expires after 30 days unless upgraded during its grace period; free services cannot use SMTP ports. These limits are set by Render and are not application build errors. Keep a separate backup before the free database expires.
-
-For a Render database migration, first let the deployed Rust API initialize its schema. Then run the migration script from your computer, with `POSTGRES_DATABASE_URL` set to that database's external URL and `SQLITE_PATH` pointing to the old local database. After verifying the deployed records, keep or archive the local SQLite copy as a backup.
-
-## Build and start
-
-```powershell
-npm run build              # Next.js web service
-npm run build:fullstack     # Rust release build and Next.js build
-npm start                   # Next.js only (Render web service)
-npm run start:fullstack     # Rust and Next.js together
-```
-
-On Render, deploy from the Blueprint rather than `start:fullstack`: the API and web app run as separate services there. Do not commit `.env.local`, passwords, API keys, or patient data.
-
-## Project layout
-
-- `backend/` — Rust Axum API and PostgreSQL access/schema initialization.
-- `app/` — Next.js user interface and the reminder email endpoint.
-- `lib/` — PostgreSQL email-reminder queries and dose schedule helper.
-- `scripts/dev-fullstack.cjs` — starts/stops both local servers together.
-- `scripts/migrate-sqlite-to-postgres.mjs` — one-time importer for the legacy SQLite database.
-- `render.yaml` — Render Blueprint for the free-tier deployment.
+For a hosted database, use its external connection string and add `?sslmode=require` when required by the provider. The migration script preserves IDs, skips duplicates, and rolls back on failure.

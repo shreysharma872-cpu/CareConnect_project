@@ -1,4 +1,5 @@
 'use client'
+import { apiFetch } from '@/lib/api-client'
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
@@ -30,8 +31,8 @@ export default function JournalPage() {
   async function fetchAll(patientId: string) {
     setLoading(true)
     const [jRes, nRes] = await Promise.all([
-      fetch(`/api/journal?patientId=${patientId}`),
-      fetch(`/api/caretaker-notes?patientId=${patientId}`),
+      apiFetch(`/api/journal?patientId=${patientId}`),
+      apiFetch(`/api/caretaker-notes?patientId=${patientId}`),
     ])
     if (jRes.ok) setEntries(await jRes.json())
     if (nRes.ok) setNotes(await nRes.json())
@@ -40,7 +41,7 @@ export default function JournalPage() {
 
   async function addEntry(e: React.FormEvent) {
     e.preventDefault()
-    await fetch('/api/journal', {
+    await apiFetch('/api/journal', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...form, patient_id: patient.id }),
     })
@@ -50,7 +51,7 @@ export default function JournalPage() {
 
   async function addNote(e: React.FormEvent) {
     e.preventDefault()
-    await fetch('/api/caretaker-notes', {
+    await apiFetch('/api/caretaker-notes', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...noteForm, patient_id: patient.id }),
     })

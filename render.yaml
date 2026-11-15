@@ -24,37 +24,57 @@ services:
         value: production
       - key: RUST_BACKEND_HOST
         value: 0.0.0.0
+      - key: PUBLIC_API_URL
+        fromService:
+          name: careconnect-api
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://careconnect-web.onrender.com
 
   - type: web
     name: careconnect-web
-    runtime: node
-    plan: free
-    buildCommand: npm ci && npm run build
-    startCommand: npm start
-    healthCheckPath: /
+    runtime: static
+    buildCommand: npm ci && npm run build:static
+    staticPublishPath: ./out
     envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: careconnect-db
-          property: connectionString
-      - key: RUST_BACKEND_HOSTPORT
+      - key: NEXT_PUBLIC_API_BASE_URL
         fromService:
           name: careconnect-api
           type: web
-          property: hostport
-      - key: SESSION_SECRET
-        fromService:
-          name: careconnect-api
-          type: web
-          envVarKey: SESSION_SECRET
-      - key: CRON_SECRET
-        generateValue: true
-      - key: NODE_ENV
-        value: production
-      - key: ENABLE_IN_APP_REMINDER_SCHEDULER
-        value: "false"
-      - key: NEXT_PUBLIC_APP_URL
-        fromService:
-          name: careconnect-web
-          type: web
-          envVarKey: RENDER_EXTERNAL_URL
+          envVarKey: PUBLIC_API_URL
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: Strict-Transport-Security
+        value: max-age=31536000; includeSubDomains
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline'; connect-src 'self' https://*.onrender.com"
+    routes:
+      - type: redirect
+        source: /dashboard
+        destination: /dashboard/
+      - type: redirect
+        source: /medications
+        destination: /medications/
+      - type: redirect
+        source: /appointments
+        destination: /appointments/
+      - type: redirect
+        source: /vitals
+        destination: /vitals/
+      - type: redirect
+        source: /journal
+        destination: /journal/
+      - type: redirect
+        source: /care-team
+        destination: /care-team/

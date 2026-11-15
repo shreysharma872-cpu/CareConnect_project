@@ -1,4 +1,5 @@
 'use client'
+import { apiFetch } from '@/lib/api-client'
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
@@ -39,9 +40,9 @@ export default function DashboardPage() {
   async function fetchAll(patientId: string) {
     setLoading(true)
     const [dosesRes, apptRes, statsRes] = await Promise.all([
-      fetch(`/api/doses?patientId=${patientId}&date=${today}`),
-      fetch(`/api/appointments?patientId=${patientId}&upcoming=true`),
-      fetch(`/api/stats?patientId=${patientId}&days=30`),
+      apiFetch(`/api/doses?patientId=${patientId}&date=${today}`),
+      apiFetch(`/api/appointments?patientId=${patientId}&upcoming=true`),
+      apiFetch(`/api/stats?patientId=${patientId}&days=30`),
     ])
     if (dosesRes.ok) setTodayDoses(await dosesRes.json())
     if (apptRes.ok) setUpcomingAppointments((await apptRes.json()).slice(0, 3))
@@ -50,19 +51,19 @@ export default function DashboardPage() {
   }
 
   async function markDose(doseId: string, status: 'taken' | 'missed') {
-    await fetch('/api/doses', {
+    await apiFetch('/api/doses', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ doseId, status }),
     })
     setTodayDoses(prev => prev.map(d => d.id === doseId ? { ...d, status } : d))
     if (patient) {
-      const statsRes = await fetch(`/api/stats?patientId=${patient.id}&days=30`)
+      const statsRes = await apiFetch(`/api/stats?patientId=${patient.id}&days=30`)
       if (statsRes.ok) setStats(await statsRes.json())
     }
   }
 
   async function logout() {
-    await fetch('/api/patients/logout', { method: 'POST' })
+    await apiFetch('/api/patients/logout', { method: 'POST' })
     localStorage.removeItem('patient')
     router.push('/')
   }

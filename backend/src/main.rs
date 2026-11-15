@@ -37,6 +37,7 @@ struct AppState {
     database_url: String,
     session_secret: String,
     cron_secret: String,
+    cors_allowed_origins: String,
 }
 
 #[tokio::main]
@@ -61,10 +62,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => "careconnect-local-development-secret-not-for-production".into(),
     };
     let cron_secret = env::var("CRON_SECRET").unwrap_or_default();
+    let cors_allowed_origins = env::var("CORS_ALLOWED_ORIGINS").unwrap_or_default();
     let state = AppState {
         database_url,
         session_secret,
         cron_secret,
+        cors_allowed_origins,
     };
     let database_state = state.clone();
     tokio::task::spawn_blocking(move || {
@@ -235,6 +238,25 @@ fn ok(value: Value) -> Response {
 fn fail(status: StatusCode, message: &str) -> Response {
     response(status, json!({"error":message}))
 }
+fn apply_cors(response: &mut Response, origin: Option<&str>, allowed_origins: &str) {
+    let Some(origin) = origin else { return };
+    if !allowed_origins
+        .split(',')
+        .map(str::trim)
+        .any(|allowed| allowed == origin)
+    {
+        return;
+    }
+    let headers = response.headers_mut();
+    if let Ok(value) = header::HeaderValue::from_str(origin) {
+        headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+            header::HeaderValue::from_static("true"),
+        );
+        headers.insert(header::VARY, header::HeaderValue::from_static("Origin"));
+    }
+}
 fn db_error(error: impl std::fmt::Display) -> Response {
     eprintln!("[CareConnect Rust API] {error}");
     fail(
@@ -358,13 +380,19 @@ fn now() -> u64 {
         .as_secs()
 }
 fn login_cookie(token: &str) -> String {
+    let production = env::var("NODE_ENV").as_deref() == Ok("production");
     format!(
-        "careconnect_session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800{}",
-        if env::var("NODE_ENV").as_deref() == Ok("production") {
-            "; Secure"
-        } else {
-            ""
-        }
+        "careconnect_session={token}; Path=/; HttpOnly; SameSite={}; Max-Age=604800{}",
+        if production { "None" } else { "Lax" },
+        if production { "; Secure" } else { "" }
+    )
+}
+fn logout_cookie() -> String {
+    let production = env::var("NODE_ENV").as_deref() == Ok("production");
+    format!(
+        "careconnect_session=; Path=/; HttpOnly; SameSite={}; Max-Age=0{}",
+        if production { "None" } else { "Lax" },
+        if production { "; Secure" } else { "" }
     )
 }
 fn rows(db: &Connection, sql: &str, patient: &str) -> Result<Vec<Value>, DbError> {
@@ -485,20 +513,57 @@ fn ensure_dose_schedule(db: &Connection, patient: &str) -> Result<(), DbError> {
 
 async fn dispatch(State(state): State<AppState>, request: axum::extract::Request) -> Response {
     let (parts, body) = request.into_parts();
+    let origin = parts
+        .headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    if parts.method == axum::http::Method::OPTIONS {
+        let mut response = StatusCode::NO_CONTENT.into_response();
+        apply_cors(
+            &mut response,
+            origin.as_deref(),
+            &state.cors_allowed_origins,
+        );
+        if response
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+        {
+            let headers = response.headers_mut();
+            headers.insert(
+                header::ACCESS_CONTROL_ALLOW_METHODS,
+                header::HeaderValue::from_static("GET, POST, PUT, PATCH, DELETE, OPTIONS"),
+            );
+            headers.insert(
+                header::ACCESS_CONTROL_ALLOW_HEADERS,
+                header::HeaderValue::from_static("content-type, authorization"),
+            );
+            headers.insert(
+                header::ACCESS_CONTROL_MAX_AGE,
+                header::HeaderValue::from_static("600"),
+            );
+        }
+        return response;
+    }
+    let allowed_origins = state.cors_allowed_origins.clone();
     let body = match axum::body::to_bytes(body, 1_048_576).await {
         Ok(b) => b,
         Err(_) => return fail(StatusCode::BAD_REQUEST, "Request body too large"),
     };
-    match tokio::task::spawn_blocking(move || dispatch_sync(state, parts, body.to_vec())).await {
-        Ok(response) => response,
-        Err(error) => {
-            eprintln!("[CareConnect Rust API] Request worker failed: {error}");
-            fail(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Request processing failed",
-            )
-        }
-    }
+    let mut response =
+        match tokio::task::spawn_blocking(move || dispatch_sync(state, parts, body.to_vec())).await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                eprintln!("[CareConnect Rust API] Request worker failed: {error}");
+                fail(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Request processing failed",
+                )
+            }
+        };
+    apply_cors(&mut response, origin.as_deref(), &allowed_origins);
+    response
 }
 
 fn dispatch_sync(state: AppState, parts: axum::http::request::Parts, body: Vec<u8>) -> Response {
@@ -565,12 +630,9 @@ fn dispatch_sync(state: AppState, parts: axum::http::request::Parts, body: Vec<u
     }
     if path == "patients/logout" && method == "POST" {
         let mut r = ok(json!({"success":true}));
-        r.headers_mut().insert(
-            header::SET_COOKIE,
-            header::HeaderValue::from_static(
-                "careconnect_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
-            ),
-        );
+        if let Ok(cookie) = header::HeaderValue::from_str(&logout_cookie()) {
+            r.headers_mut().insert(header::SET_COOKIE, cookie);
+        }
         return r;
     }
     if path == "patients" && method == "POST" {

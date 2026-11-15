@@ -1,4 +1,5 @@
 'use client'
+import { apiFetch } from '@/lib/api-client'
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -24,7 +25,7 @@ export default function HomePage() {
     const controller = new AbortController()
     const timeout = window.setTimeout(() => controller.abort(), 15000)
     try {
-      const res = await fetch('/api/patients/auth', {
+      const res = await apiFetch('/api/patients/auth', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ patientId: patientId.toUpperCase(), passcode }),
         signal: controller.signal,
@@ -51,7 +52,7 @@ export default function HomePage() {
     const controller = new AbortController()
     const timeout = window.setTimeout(() => controller.abort(), 15000)
     try {
-      const res = await fetch('/api/patients', {
+      const res = await apiFetch('/api/patients', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(regForm),
         signal: controller.signal,

@@ -1,4 +1,5 @@
 'use client'
+import { apiFetch } from '@/lib/api-client'
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
@@ -26,7 +27,7 @@ export default function VitalsPage() {
 
   async function fetchVitals(patientId: string) {
     setLoading(true)
-    const res = await fetch(`/api/vitals?patientId=${patientId}&limit=50`)
+    const res = await apiFetch(`/api/vitals?patientId=${patientId}&limit=50`)
     if (res.ok) setVitals(await res.json())
     setLoading(false)
   }
@@ -34,7 +35,7 @@ export default function VitalsPage() {
   async function addVital(e: React.FormEvent) {
     e.preventDefault()
     const vt = VITAL_TYPES.find(v => v.key === selectedType)!
-    await fetch('/api/vitals', {
+    await apiFetch('/api/vitals', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ patient_id: patient.id, type: selectedType, value: parseFloat(form.value), unit: vt.unit, notes: form.notes }),
     })

@@ -1,4 +1,5 @@
 'use client'
+import { apiFetch } from '@/lib/api-client'
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
@@ -44,7 +45,7 @@ export default function MedicationsPage() {
 
   async function fetchMedications(patientId: string) {
     setLoading(true)
-    const res = await fetch(`/api/medications?patientId=${patientId}`)
+    const res = await apiFetch(`/api/medications?patientId=${patientId}`)
     if (res.ok) setMedications(await res.json())
     setLoading(false)
   }
@@ -55,7 +56,7 @@ export default function MedicationsPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    const res = await fetch('/api/medications', {
+    const res = await apiFetch('/api/medications', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...form, patient_id: patient.id }),
     })
@@ -67,7 +68,7 @@ export default function MedicationsPage() {
   }
 
   async function toggleActive(med: Medication) {
-    await fetch('/api/medications', {
+    await apiFetch('/api/medications', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...med, times: JSON.parse(med.times), active: med.active ? 0 : 1 }),
     })
