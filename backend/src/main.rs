@@ -7,33 +7,51 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use bcrypt::{hash, verify, DEFAULT_COST};
-use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{
+    DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, SecondsFormat, TimeZone, Utc,
+};
 use hmac::{Hmac, Mac};
-use rusqlite::{params, types::ValueRef, Connection, OptionalExtension};
+use postgres::{
+    types::{FromSqlOwned, ToSql},
+    NoTls, Row as PgRow,
+};
+use postgres_native_tls::MakeTlsConnector;
 use serde_json::{json, Map, Value};
 use sha2::Sha256;
+use std::cell::RefCell;
 use std::{
     env,
-    path::PathBuf,
+    path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
+macro_rules! params {
+    ($($value:expr),* $(,)?) => { &[$(&$value as &(dyn ToSql + Sync)),*] };
+}
 #[derive(Clone)]
 struct AppState {
-    database: PathBuf,
+    database_url: String,
     session_secret: String,
     cron_secret: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let _ = dotenvy::from_filename(".env.local");
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let project_root = manifest_dir.parent().unwrap_or(manifest_dir);
+    let env_file = project_root.join(".env.local");
+    if env_file.exists() {
+        if let Err(error) = dotenvy::from_path(&env_file) {
+            eprintln!("Could not load {}: {error}", env_file.display());
+        }
+    }
     let _ = dotenvy::dotenv();
-    let database =
-        PathBuf::from(env::var("DATABASE_PATH").unwrap_or_else(|_| "./elderly_care.db".into()));
+    let database_url = env::var("DATABASE_URL").map_err(|_| {
+        "DATABASE_URL is missing. Set it in the project-root .env.local or service environment."
+    })?;
     let session_secret = match env::var("SESSION_SECRET") {
         Ok(secret) if !secret.trim().is_empty() => secret,
         _ if env::var("NODE_ENV").as_deref() == Ok("production") => {
@@ -43,18 +61,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let cron_secret = env::var("CRON_SECRET").unwrap_or_default();
     let state = AppState {
-        database,
+        database_url,
         session_secret,
         cron_secret,
     };
-    let conn = connect(&state)?;
-    init_db(&conn)?;
-    drop(conn);
+    let database_state = state.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = connect(&database_state)?;
+        init_db(&conn)
+    })
+    .await??;
     let app = Router::new()
         .route("/api/{*path}", any(dispatch))
         .with_state(state);
-    let port = env::var("RUST_BACKEND_PORT").unwrap_or_else(|_| "4000".into());
-    let host = env::var("RUST_BACKEND_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+    let port = env::var("PORT")
+        .or_else(|_| env::var("RUST_BACKEND_PORT"))
+        .unwrap_or_else(|_| "4000".into());
+    let host = env::var("RUST_BACKEND_HOST").unwrap_or_else(|_| "0.0.0.0".into());
     let listener = TcpListener::bind(format!("{host}:{port}")).await?;
     println!("CareConnect Rust API listening on http://{host}:{port}");
     axum::serve(listener, app)
@@ -65,49 +88,141 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn connect(state: &AppState) -> rusqlite::Result<Connection> {
-    let path = state.database.clone();
-    let connection = Connection::open(path)?;
-    connection.busy_timeout(std::time::Duration::from_secs(5))?;
-    connection.execute_batch(
-        "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;",
-    )?;
-    Ok(connection)
+#[derive(Debug)]
+enum DbError {
+    Postgres(postgres::Error),
+    QueryReturnedNoRows,
+    Other(String),
+}
+impl std::fmt::Display for DbError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Postgres(error) => write!(formatter, "{error}"),
+            Self::QueryReturnedNoRows => write!(formatter, "Query returned no rows"),
+            Self::Other(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+impl std::error::Error for DbError {}
+impl From<postgres::Error> for DbError {
+    fn from(error: postgres::Error) -> Self {
+        Self::Postgres(error)
+    }
 }
 
-fn init_db(db: &Connection) -> rusqlite::Result<()> {
-    db.execute_batch(r#"
-      CREATE TABLE IF NOT EXISTS patients(id TEXT PRIMARY KEY,name TEXT NOT NULL,dob TEXT,blood_group TEXT,passcode TEXT NOT NULL,email TEXT,phone TEXT,address TEXT,emergency_contact_name TEXT,emergency_contact_phone TEXT,emergency_contact_relation TEXT,allergies TEXT,medical_conditions TEXT,created_at DATETIME DEFAULT CURRENT_TIMESTAMP,updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
-      CREATE TABLE IF NOT EXISTS authorized_users(id TEXT PRIMARY KEY,patient_id TEXT NOT NULL,name TEXT NOT NULL,email TEXT NOT NULL,role TEXT NOT NULL DEFAULT 'family',created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
-      CREATE TABLE IF NOT EXISTS medications(id TEXT PRIMARY KEY,patient_id TEXT NOT NULL,name TEXT NOT NULL,dosage TEXT NOT NULL,dosage_unit TEXT DEFAULT 'mg',frequency TEXT NOT NULL,times TEXT NOT NULL,with_food INTEGER DEFAULT 0,start_date TEXT NOT NULL,end_date TEXT,notes TEXT,color TEXT DEFAULT '#14b8a6',active INTEGER DEFAULT 1,created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
-      CREATE TABLE IF NOT EXISTS dose_logs(id TEXT PRIMARY KEY,medication_id TEXT NOT NULL,patient_id TEXT NOT NULL,scheduled_time DATETIME NOT NULL,taken_at DATETIME,status TEXT DEFAULT 'pending',notes TEXT,reminder_sent INTEGER DEFAULT 0,missed_reminder_sent INTEGER DEFAULT 0);
-      CREATE TABLE IF NOT EXISTS appointments(id TEXT PRIMARY KEY,patient_id TEXT NOT NULL,doctor_name TEXT NOT NULL,specialty TEXT,appointment_datetime DATETIME NOT NULL,location TEXT,notes TEXT,status TEXT DEFAULT 'scheduled',reminder_24h_sent INTEGER DEFAULT 0,reminder_1h_sent INTEGER DEFAULT 0,created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
-      CREATE TABLE IF NOT EXISTS vitals(id TEXT PRIMARY KEY,patient_id TEXT NOT NULL,type TEXT NOT NULL,value REAL NOT NULL,unit TEXT NOT NULL,notes TEXT,recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP);
-      CREATE TABLE IF NOT EXISTS journal_entries(id TEXT PRIMARY KEY,patient_id TEXT NOT NULL,mood INTEGER NOT NULL,energy_level INTEGER,symptoms TEXT,notes TEXT,created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
-      CREATE TABLE IF NOT EXISTS caretaker_notes(id TEXT PRIMARY KEY,patient_id TEXT NOT NULL,author_name TEXT NOT NULL,content TEXT NOT NULL,is_important INTEGER DEFAULT 0,created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
-    "#)
-    ?;
-    let has_missed_flag: Option<i64> = db
-        .query_row(
-            "SELECT 1 FROM pragma_table_info('dose_logs') WHERE name='missed_reminder_sent'",
-            [],
-            |r| r.get(0),
-        )
-        .optional()?;
-    if has_missed_flag.is_none() {
-        db.execute(
-            "ALTER TABLE dose_logs ADD COLUMN missed_reminder_sent INTEGER DEFAULT 0",
-            [],
-        )?;
-        db.execute(
-            "UPDATE dose_logs SET missed_reminder_sent=reminder_sent WHERE status='missed'",
-            [],
-        )?;
+struct Connection {
+    client: RefCell<postgres::Client>,
+}
+struct Row<'a>(&'a PgRow);
+trait ColumnIndex {
+    fn as_usize(self) -> usize;
+}
+impl ColumnIndex for usize {
+    fn as_usize(self) -> usize {
+        self
     }
-    db.execute("DELETE FROM dose_logs WHERE rowid NOT IN (SELECT MIN(rowid) FROM dose_logs GROUP BY medication_id,scheduled_time)",[])?;
-    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_dose_medication_schedule ON dose_logs(medication_id,scheduled_time)",[])?;
-    db.execute_batch("CREATE INDEX IF NOT EXISTS idx_medications_patient_active ON medications(patient_id,active); CREATE INDEX IF NOT EXISTS idx_doses_patient_schedule ON dose_logs(patient_id,scheduled_time); CREATE INDEX IF NOT EXISTS idx_appointments_patient_time ON appointments(patient_id,appointment_datetime); CREATE INDEX IF NOT EXISTS idx_vitals_patient_recorded ON vitals(patient_id,recorded_at);")?;
-    Ok(())
+}
+impl ColumnIndex for i32 {
+    fn as_usize(self) -> usize {
+        self as usize
+    }
+}
+impl Row<'_> {
+    fn get<I, T>(&self, index: I) -> Result<T, DbError>
+    where
+        I: ColumnIndex,
+        T: FromSqlOwned,
+    {
+        self.0.try_get(index.as_usize()).map_err(DbError::Postgres)
+    }
+}
+impl Connection {
+    fn execute(&self, sql: &str, values: &[&(dyn ToSql + Sync)]) -> Result<u64, DbError> {
+        self.client
+            .borrow_mut()
+            .execute(&postgres_sql(sql), values)
+            .map_err(DbError::Postgres)
+    }
+    fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
+        self.client
+            .borrow_mut()
+            .batch_execute(sql)
+            .map_err(DbError::Postgres)
+    }
+    fn query_row<T>(
+        &self,
+        sql: &str,
+        values: &[&(dyn ToSql + Sync)],
+        map: impl FnOnce(&Row<'_>) -> Result<T, DbError>,
+    ) -> Result<T, DbError> {
+        let row = self
+            .client
+            .borrow_mut()
+            .query_opt(&postgres_sql(sql), values)?
+            .ok_or(DbError::QueryReturnedNoRows)?;
+        map(&Row(&row))
+    }
+    fn query_map<T>(
+        &self,
+        sql: &str,
+        values: &[&(dyn ToSql + Sync)],
+        mut map: impl FnMut(&Row<'_>) -> Result<T, DbError>,
+    ) -> Result<Vec<T>, DbError> {
+        let rows = self.client.borrow_mut().query(&postgres_sql(sql), values)?;
+        rows.iter().map(|row| map(&Row(row))).collect()
+    }
+}
+fn postgres_sql(sql: &str) -> String {
+    let bytes = sql.as_bytes();
+    let mut output = String::with_capacity(sql.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'?' && index + 1 < bytes.len() && bytes[index + 1].is_ascii_digit() {
+            output.push('$');
+            index += 1;
+            while index < bytes.len() && bytes[index].is_ascii_digit() {
+                output.push(bytes[index] as char);
+                index += 1;
+            }
+        } else {
+            output.push(bytes[index] as char);
+            index += 1;
+        }
+    }
+    output
+}
+fn connect(state: &AppState) -> Result<Connection, DbError> {
+    let client = if state.database_url.contains("sslmode=require") {
+        let connector =
+            native_tls::TlsConnector::new().map_err(|error| DbError::Other(error.to_string()))?;
+        postgres::Client::connect(&state.database_url, MakeTlsConnector::new(connector))?
+    } else {
+        postgres::Client::connect(&state.database_url, NoTls)?
+    };
+    Ok(Connection {
+        client: RefCell::new(client),
+    })
+}
+
+fn init_db(db: &Connection) -> Result<(), DbError> {
+    let schema = r#"
+      CREATE TABLE IF NOT EXISTS patients(id TEXT PRIMARY KEY,name TEXT NOT NULL,dob TEXT,blood_group TEXT,passcode TEXT NOT NULL,email TEXT,phone TEXT,address TEXT,emergency_contact_name TEXT,emergency_contact_phone TEXT,emergency_contact_relation TEXT,allergies TEXT,medical_conditions TEXT,created_at TEXT NOT NULL DEFAULT (to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')),updated_at TEXT NOT NULL DEFAULT (to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')));
+      CREATE TABLE IF NOT EXISTS authorized_users(id TEXT PRIMARY KEY,patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,name TEXT NOT NULL,email TEXT NOT NULL,role TEXT NOT NULL DEFAULT 'family',created_at TEXT NOT NULL DEFAULT (to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')));
+      CREATE TABLE IF NOT EXISTS medications(id TEXT PRIMARY KEY,patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,name TEXT NOT NULL,dosage TEXT NOT NULL,dosage_unit TEXT DEFAULT 'mg',frequency TEXT NOT NULL,times TEXT NOT NULL,with_food BIGINT DEFAULT 0,start_date TEXT NOT NULL,end_date TEXT,notes TEXT,color TEXT DEFAULT '#14b8a6',active BIGINT DEFAULT 1,created_at TEXT NOT NULL DEFAULT (to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')));
+      CREATE TABLE IF NOT EXISTS dose_logs(id TEXT PRIMARY KEY,medication_id TEXT NOT NULL REFERENCES medications(id) ON DELETE CASCADE,patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,scheduled_time TEXT NOT NULL,taken_at TEXT,status TEXT DEFAULT 'pending',notes TEXT,reminder_sent BIGINT DEFAULT 0,missed_reminder_sent BIGINT DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS appointments(id TEXT PRIMARY KEY,patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,doctor_name TEXT NOT NULL,specialty TEXT,appointment_datetime TEXT NOT NULL,location TEXT,notes TEXT,status TEXT DEFAULT 'scheduled',reminder_24h_sent BIGINT DEFAULT 0,reminder_1h_sent BIGINT DEFAULT 0,created_at TEXT NOT NULL DEFAULT (to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')));
+      CREATE TABLE IF NOT EXISTS vitals(id TEXT PRIMARY KEY,patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,type TEXT NOT NULL,value DOUBLE PRECISION NOT NULL,unit TEXT NOT NULL,notes TEXT,recorded_at TEXT NOT NULL DEFAULT (to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')));
+      CREATE TABLE IF NOT EXISTS journal_entries(id TEXT PRIMARY KEY,patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,mood BIGINT NOT NULL,energy_level BIGINT,symptoms TEXT,notes TEXT,created_at TEXT NOT NULL DEFAULT (to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')));
+      CREATE TABLE IF NOT EXISTS caretaker_notes(id TEXT PRIMARY KEY,patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,author_name TEXT NOT NULL,content TEXT NOT NULL,is_important BIGINT DEFAULT 0,created_at TEXT NOT NULL DEFAULT (to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')));
+      ALTER TABLE dose_logs ADD COLUMN IF NOT EXISTS missed_reminder_sent BIGINT DEFAULT 0;
+      DELETE FROM dose_logs a USING dose_logs b WHERE a.medication_id=b.medication_id AND a.scheduled_time=b.scheduled_time AND a.ctid>b.ctid;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_dose_medication_schedule ON dose_logs(medication_id,scheduled_time);
+      CREATE INDEX IF NOT EXISTS idx_medications_patient_active ON medications(patient_id,active);
+      CREATE INDEX IF NOT EXISTS idx_doses_patient_schedule ON dose_logs(patient_id,scheduled_time);
+      CREATE INDEX IF NOT EXISTS idx_appointments_patient_time ON appointments(patient_id,appointment_datetime);
+      CREATE INDEX IF NOT EXISTS idx_vitals_patient_recorded ON vitals(patient_id,recorded_at);
+    "#;
+    db.execute_batch(schema)
 }
 
 fn response(status: StatusCode, value: Value) -> Response {
@@ -162,13 +277,43 @@ fn valid_time(value: &str) -> bool {
 }
 fn normalized_datetime(value: &str) -> Option<String> {
     if let Ok(datetime) = DateTime::parse_from_rfc3339(value) {
-        return Some(datetime.with_timezone(&Utc).to_rfc3339());
+        return Some(
+            datetime
+                .with_timezone(&Utc)
+                .to_rfc3339_opts(SecondsFormat::Millis, true),
+        );
     }
     let naive = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M").ok()?;
     Local
         .from_local_datetime(&naive)
         .earliest()
-        .map(|datetime| datetime.with_timezone(&Utc).to_rfc3339())
+        .map(|datetime| {
+            datetime
+                .with_timezone(&Utc)
+                .to_rfc3339_opts(SecondsFormat::Millis, true)
+        })
+}
+fn utc_now() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+fn utc_days_ago(days: i64) -> String {
+    (Utc::now() - Duration::days(days)).to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+fn local_midnight_utc(date: NaiveDate) -> Option<String> {
+    Local
+        .from_local_datetime(&date.and_time(NaiveTime::MIN))
+        .earliest()
+        .map(|value| {
+            value
+                .with_timezone(&Utc)
+                .to_rfc3339_opts(SecondsFormat::Millis, true)
+        })
+}
+fn local_day_bounds(date: NaiveDate) -> Option<(String, String)> {
+    Some((
+        local_midnight_utc(date)?,
+        local_midnight_utc(date + Duration::days(1))?,
+    ))
 }
 fn session_id(headers: &HeaderMap, secret: &str) -> Option<String> {
     let raw = headers
@@ -215,15 +360,8 @@ fn login_cookie(token: &str) -> String {
         }
     )
 }
-fn rows(db: &Connection, sql: &str, patient: &str) -> rusqlite::Result<Vec<Value>> {
-    let mut statement = db.prepare(sql)?;
-    let names: Vec<String> = statement
-        .column_names()
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-    let mapped = statement.query_map([patient], |row| row_value(row, &names))?;
-    mapped.collect()
+fn rows(db: &Connection, sql: &str, patient: &str) -> Result<Vec<Value>, DbError> {
+    db.query_map(sql, params![patient], row_value)
 }
 fn rows_filtered(
     db: &Connection,
@@ -231,34 +369,39 @@ fn rows_filtered(
     patient: &str,
     filter: Option<&str>,
     limit: i64,
-) -> rusqlite::Result<Vec<Value>> {
-    let mut statement = db.prepare(sql)?;
-    let names: Vec<String> = statement
-        .column_names()
-        .iter()
-        .map(|name| name.to_string())
-        .collect();
+) -> Result<Vec<Value>, DbError> {
     if let Some(filter) = filter {
-        let mapped = statement.query_map(params![patient, filter, limit], |row| {
-            row_value(row, &names)
-        })?;
-        mapped.collect()
+        db.query_map(sql, params![patient, filter, limit], row_value)
     } else {
-        let mapped = statement.query_map(params![patient, limit], |row| row_value(row, &names))?;
-        mapped.collect()
+        db.query_map(sql, params![patient, limit], row_value)
     }
 }
-fn row_value(row: &rusqlite::Row<'_>, names: &[String]) -> rusqlite::Result<Value> {
+fn rows_between(
+    db: &Connection,
+    sql: &str,
+    patient: &str,
+    start: &str,
+    end: &str,
+) -> Result<Vec<Value>, DbError> {
+    db.query_map(sql, params![patient, start, end], row_value)
+}
+fn row_value(row: &Row<'_>) -> Result<Value, DbError> {
     let mut object = Map::new();
-    for (index, name) in names.iter().enumerate() {
-        let value = match row.get_ref(index)? {
-            ValueRef::Null => Value::Null,
-            ValueRef::Integer(v) => json!(v),
-            ValueRef::Real(v) => json!(v),
-            ValueRef::Text(v) => json!(String::from_utf8_lossy(v).to_string()),
-            ValueRef::Blob(v) => json!(URL_SAFE_NO_PAD.encode(v)),
+    for (index, column) in row.0.columns().iter().enumerate() {
+        let value = match column.type_().name() {
+            "int2" => json!(row.get::<_, i16>(index)?),
+            "int4" => json!(row.get::<_, i32>(index)?),
+            "int8" => json!(row.get::<_, i64>(index)?),
+            "float4" => json!(row.get::<_, f32>(index)?),
+            "float8" => json!(row.get::<_, f64>(index)?),
+            "bool" => json!(row.get::<_, bool>(index)?),
+            "bytea" => json!(URL_SAFE_NO_PAD.encode(row.get::<_, Vec<u8>>(index)?)),
+            _ => match row.get::<_, Option<String>>(index)? {
+                Some(value) => json!(value),
+                None => Value::Null,
+            },
         };
-        object.insert(name.clone(), value);
+        object.insert(column.name().to_string(), value);
     }
     Ok(Value::Object(object))
 }
@@ -270,7 +413,7 @@ fn create_dose_schedule(
     end: Option<&str>,
     frequency: &str,
     times: &Value,
-) -> rusqlite::Result<()> {
+) -> Result<(), DbError> {
     if frequency == "As needed" {
         return Ok(());
     }
@@ -293,19 +436,24 @@ fn create_dose_schedule(
             let Ok(t) = NaiveTime::parse_from_str(value, "%H:%M") else {
                 continue;
             };
-            let Some(stamp) = Local
-                .from_local_datetime(&day.and_time(t))
-                .earliest()
-                .map(|datetime| datetime.with_timezone(&Utc).to_rfc3339())
+            let Some(stamp) =
+                Local
+                    .from_local_datetime(&day.and_time(t))
+                    .earliest()
+                    .map(|datetime| {
+                        datetime
+                            .with_timezone(&Utc)
+                            .to_rfc3339_opts(SecondsFormat::Millis, true)
+                    })
             else {
                 continue;
             };
-            db.execute("INSERT OR IGNORE INTO dose_logs(id,medication_id,patient_id,scheduled_time,status) VALUES(?1,?2,?3,?4,'pending')",params![Uuid::new_v4().to_string(),medication,patient,stamp])?;
+            db.execute("INSERT INTO dose_logs(id,medication_id,patient_id,scheduled_time,status) VALUES(?1,?2,?3,?4,'pending') ON CONFLICT (medication_id,scheduled_time) DO NOTHING",params![Uuid::new_v4().to_string(),medication,patient,stamp])?;
         }
     }
     Ok(())
 }
-fn ensure_dose_schedule(db: &Connection, patient: &str) -> rusqlite::Result<()> {
+fn ensure_dose_schedule(db: &Connection, patient: &str) -> Result<(), DbError> {
     let medications = rows(db, "SELECT id,start_date,end_date,frequency,times FROM medications WHERE patient_id=?1 AND active=1", patient)?;
     for medication in medications {
         let Some(id) = medication.get("id").and_then(Value::as_str) else {
@@ -334,6 +482,19 @@ async fn dispatch(State(state): State<AppState>, request: axum::extract::Request
         Ok(b) => b,
         Err(_) => return fail(StatusCode::BAD_REQUEST, "Request body too large"),
     };
+    match tokio::task::spawn_blocking(move || dispatch_sync(state, parts, body.to_vec())).await {
+        Ok(response) => response,
+        Err(error) => {
+            eprintln!("[CareConnect Rust API] Request worker failed: {error}");
+            fail(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Request processing failed",
+            )
+        }
+    }
+}
+
+fn dispatch_sync(state: AppState, parts: axum::http::request::Parts, body: Vec<u8>) -> Response {
     let data: Value = serde_json::from_slice(&body).unwrap_or_else(|_| json!({}));
     let path = parts.uri.path().trim_start_matches("/api/");
     let method = parts.method.as_str();
@@ -341,7 +502,7 @@ async fn dispatch(State(state): State<AppState>, request: axum::extract::Request
     if path == "health" && method == "GET" {
         return match connect(&state).and_then(|db| {
             init_db(&db)?;
-            db.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))
+            db.query_row("SELECT 1::BIGINT", &[], |r| r.get::<_, i64>(0))
         }) {
             Ok(_) => ok(
                 json!({"application":"careconnect","status":"ok","database":"connected","backend":"rust"}),
@@ -356,13 +517,15 @@ async fn dispatch(State(state): State<AppState>, request: axum::extract::Request
             return fail(StatusCode::BAD_REQUEST, "ID and passcode required");
         }
         let result = connect(&state).and_then(|db| {
-            db.query_row("SELECT passcode FROM patients WHERE id=?1", [&id], |r| {
-                r.get::<_, String>(0)
-            })
+            db.query_row(
+                "SELECT passcode FROM patients WHERE id=?1",
+                params![id],
+                |r| r.get::<_, String>(0),
+            )
         });
         let stored = match result {
             Ok(v) => v,
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
+            Err(DbError::QueryReturnedNoRows) => {
                 return fail(StatusCode::UNAUTHORIZED, "Invalid patient ID or passcode")
             }
             Err(e) => return db_error(e),
@@ -510,10 +673,10 @@ async fn dispatch(State(state): State<AppState>, request: axum::extract::Request
         };
         let owner = db.query_row(
             "SELECT patient_id FROM medications WHERE id=?1",
-            [id],
+            params![id],
             |r| r.get::<_, String>(0),
         );
-        if owner.as_deref() != Ok(patient_id.as_str()) {
+        if owner.as_ref().map(|value| value.as_str()).ok() != Some(patient_id.as_str()) {
             return fail(StatusCode::NOT_FOUND, "Medication not found");
         }
         let active = data["active"]
@@ -560,7 +723,7 @@ async fn dispatch(State(state): State<AppState>, request: axum::extract::Request
         if let Err(e) = result {
             return db_error(e);
         }
-        let _=db.execute("DELETE FROM dose_logs WHERE medication_id=?1 AND patient_id=?2 AND status='pending' AND julianday(scheduled_time)>=julianday('now')",params![id,patient_id]);
+        let _=db.execute("DELETE FROM dose_logs WHERE medication_id=?1 AND patient_id=?2 AND status='pending' AND scheduled_time>=?3",params![id,patient_id,utc_now()]);
         if active {
             let _ = create_dose_schedule(
                 &db,
@@ -771,7 +934,13 @@ async fn dispatch(State(state): State<AppState>, request: axum::extract::Request
             Ok(v) => v,
             Err(e) => return db_error(e),
         };
-        let duplicate = db.query_row("SELECT EXISTS(SELECT 1 FROM authorized_users WHERE patient_id=?1 AND lower(email)=?2)", params![patient_id,email], |row| row.get::<_, i64>(0)).unwrap_or(0);
+        let duplicate = db
+            .query_row(
+                "SELECT COUNT(*) FROM authorized_users WHERE patient_id=?1 AND lower(email)=?2",
+                params![patient_id, email],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0);
         if duplicate != 0 {
             return fail(
                 StatusCode::CONFLICT,
@@ -848,7 +1017,7 @@ async fn dispatch(State(state): State<AppState>, request: axum::extract::Request
             Ok(v) => v,
             Err(e) => return db_error(e),
         };
-        return match db.execute("UPDATE patients SET name=?1,dob=?2,blood_group=?3,email=?4,phone=?5,address=?6,emergency_contact_name=?7,emergency_contact_phone=?8,emergency_contact_relation=?9,allergies=?10,medical_conditions=?11,updated_at=CURRENT_TIMESTAMP WHERE id=?12", params![name,nullable_text(&data,"dob"),nullable_text(&data,"blood_group"),nullable_text(&data,"email"),nullable_text(&data,"phone"),nullable_text(&data,"address"),nullable_text(&data,"emergency_contact_name"),nullable_text(&data,"emergency_contact_phone"),nullable_text(&data,"emergency_contact_relation"),nullable_text(&data,"allergies"),nullable_text(&data,"medical_conditions"),patient_id]) {
+        return match db.execute("UPDATE patients SET name=?1,dob=?2,blood_group=?3,email=?4,phone=?5,address=?6,emergency_contact_name=?7,emergency_contact_phone=?8,emergency_contact_relation=?9,allergies=?10,medical_conditions=?11,updated_at=to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') WHERE id=?12", params![name,nullable_text(&data,"dob"),nullable_text(&data,"blood_group"),nullable_text(&data,"email"),nullable_text(&data,"phone"),nullable_text(&data,"address"),nullable_text(&data,"emergency_contact_name"),nullable_text(&data,"emergency_contact_phone"),nullable_text(&data,"emergency_contact_relation"),nullable_text(&data,"allergies"),nullable_text(&data,"medical_conditions"),patient_id]) {
             Ok(0) => fail(StatusCode::NOT_FOUND, "Patient not found"),
             Ok(_) => ok(json!({"message":"Updated"})),
             Err(e) => db_error(e),
@@ -902,15 +1071,18 @@ async fn dispatch(State(state): State<AppState>, request: axum::extract::Request
             Ok(v) => v,
             Err(e) => return db_error(e),
         };
-        let sql = if query_value(&parts.uri, "upcoming") == "true" {
-            "SELECT * FROM appointments WHERE patient_id=?1 AND julianday(appointment_datetime)>=julianday('now') AND status='scheduled' ORDER BY appointment_datetime"
+        if query_value(&parts.uri, "upcoming") == "true" {
+            return match db.query_map("SELECT * FROM appointments WHERE patient_id=?1 AND appointment_datetime>=?2 AND status='scheduled' ORDER BY appointment_datetime", params![patient_id,utc_now()], row_value) { Ok(v)=>ok(json!(v)), Err(e)=>db_error(e) };
         } else {
-            "SELECT * FROM appointments WHERE patient_id=?1 ORDER BY appointment_datetime"
-        };
-        return match rows(&db, sql, &patient_id) {
-            Ok(v) => ok(json!(v)),
-            Err(e) => db_error(e),
-        };
+            return match rows(
+                &db,
+                "SELECT * FROM appointments WHERE patient_id=?1 ORDER BY appointment_datetime",
+                &patient_id,
+            ) {
+                Ok(v) => ok(json!(v)),
+                Err(e) => db_error(e),
+            };
+        }
     }
     if path == "vitals" && method == "GET" {
         if query_value(&parts.uri, "patientId") != patient_id {
@@ -1002,7 +1174,11 @@ async fn dispatch(State(state): State<AppState>, request: axum::extract::Request
             if !valid_date(&date) {
                 return fail(StatusCode::BAD_REQUEST, "Invalid date");
             }
-            rows_filtered(&db, "SELECT dl.*,m.name AS medication_name,m.dosage,m.dosage_unit,m.color,m.with_food,m.times FROM dose_logs dl JOIN medications m ON m.id=dl.medication_id WHERE dl.patient_id=?1 AND m.active=1 AND date(dl.scheduled_time,'localtime')=?2 ORDER BY dl.scheduled_time ASC LIMIT ?3", &patient_id, Some(&date), 500)
+            let date = NaiveDate::parse_from_str(&date, "%Y-%m-%d").unwrap();
+            let Some((start, end)) = local_day_bounds(date) else {
+                return fail(StatusCode::BAD_REQUEST, "Invalid date");
+            };
+            rows_between(&db, "SELECT dl.*,m.name AS medication_name,m.dosage,m.dosage_unit,m.color,m.with_food,m.times FROM dose_logs dl JOIN medications m ON m.id=dl.medication_id WHERE dl.patient_id=?1 AND m.active=1 AND dl.scheduled_time>=?2 AND dl.scheduled_time<?3 ORDER BY dl.scheduled_time ASC", &patient_id, &start,&end)
         } else if !medication_id.is_empty() {
             rows_filtered(&db, "SELECT dl.*,m.name AS medication_name,m.dosage,m.dosage_unit,m.color,m.with_food,m.times FROM dose_logs dl JOIN medications m ON m.id=dl.medication_id WHERE dl.patient_id=?1 AND dl.medication_id=?2 ORDER BY dl.scheduled_time DESC LIMIT ?3", &patient_id, Some(&medication_id), 100)
         } else {
@@ -1028,23 +1204,27 @@ async fn dispatch(State(state): State<AppState>, request: axum::extract::Request
             .parse::<i64>()
             .unwrap_or(30)
             .clamp(1, 365);
-        let taken:i64=db.query_row("SELECT COUNT(*) FROM dose_logs WHERE patient_id=?1 AND status='taken' AND julianday(scheduled_time)>=julianday('now',printf('-%d days',?2)) AND julianday(scheduled_time)<=julianday('now')",params![patient_id,days],|r|r.get(0)).unwrap_or(0);
-        let missed:i64=db.query_row("SELECT COUNT(*) FROM dose_logs WHERE patient_id=?1 AND status='missed' AND julianday(scheduled_time)>=julianday('now',printf('-%d days',?2)) AND julianday(scheduled_time)<=julianday('now')",params![patient_id,days],|r|r.get(0)).unwrap_or(0);
-        let total:i64=db.query_row("SELECT COUNT(*) FROM dose_logs WHERE patient_id=?1 AND julianday(scheduled_time)>=julianday('now',printf('-%d days',?2)) AND julianday(scheduled_time)<=julianday('now')",params![patient_id,days],|r|r.get(0)).unwrap_or(0);
+        let cutoff = utc_days_ago(days);
+        let current_time = utc_now();
+        let taken:i64=db.query_row("SELECT COUNT(*) FROM dose_logs WHERE patient_id=?1 AND status='taken' AND scheduled_time>=?2 AND scheduled_time<=?3",params![patient_id,cutoff,current_time],|r|r.get(0)).unwrap_or(0);
+        let missed:i64=db.query_row("SELECT COUNT(*) FROM dose_logs WHERE patient_id=?1 AND status='missed' AND scheduled_time>=?2 AND scheduled_time<=?3",params![patient_id,cutoff,current_time],|r|r.get(0)).unwrap_or(0);
+        let total:i64=db.query_row("SELECT COUNT(*) FROM dose_logs WHERE patient_id=?1 AND scheduled_time>=?2 AND scheduled_time<=?3",params![patient_id,cutoff,current_time],|r|r.get(0)).unwrap_or(0);
         let meds: i64 = db
             .query_row(
                 "SELECT COUNT(*) FROM medications WHERE patient_id=?1 AND active=1",
-                [&patient_id],
+                params![patient_id],
                 |r| r.get(0),
             )
             .unwrap_or(0);
-        let appts:i64=db.query_row("SELECT COUNT(*) FROM appointments WHERE patient_id=?1 AND status='scheduled' AND julianday(appointment_datetime)>=julianday('now')",[&patient_id],|r|r.get(0)).unwrap_or(0);
+        let appts:i64=db.query_row("SELECT COUNT(*) FROM appointments WHERE patient_id=?1 AND status='scheduled' AND appointment_datetime>=?2",params![patient_id,utc_now()],|r|r.get(0)).unwrap_or(0);
         let mut daily = Vec::new();
         for offset in (0..7).rev() {
             let day = Local::now().date_naive() - Duration::days(offset);
-            let key = day.format("%Y-%m-%d").to_string();
-            let day_total:i64=db.query_row("SELECT COUNT(*) FROM dose_logs WHERE patient_id=?1 AND date(scheduled_time,'localtime')=?2",params![patient_id,key],|r|r.get(0)).unwrap_or(0);
-            let day_taken:i64=db.query_row("SELECT COUNT(*) FROM dose_logs WHERE patient_id=?1 AND status='taken' AND date(scheduled_time,'localtime')=?2",params![patient_id,key],|r|r.get(0)).unwrap_or(0);
+            let Some((start, end)) = local_day_bounds(day) else {
+                continue;
+            };
+            let day_total:i64=db.query_row("SELECT COUNT(*) FROM dose_logs WHERE patient_id=?1 AND scheduled_time>=?2 AND scheduled_time<?3",params![patient_id,start,end],|r|r.get(0)).unwrap_or(0);
+            let day_taken:i64=db.query_row("SELECT COUNT(*) FROM dose_logs WHERE patient_id=?1 AND status='taken' AND scheduled_time>=?2 AND scheduled_time<?3",params![patient_id,start,end],|r|r.get(0)).unwrap_or(0);
             daily.push(json!({"date":day.format("%a").to_string(),"total":day_total,"taken":day_taken,"rate":if day_total==0{0}else{day_taken*100/day_total}}));
         }
         return ok(

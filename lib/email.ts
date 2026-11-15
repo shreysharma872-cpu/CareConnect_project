@@ -1,13 +1,5 @@
 import nodemailer from 'nodemailer'
 
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-})
-
 interface EmailOptions {
   to: string | string[]
   subject: string
@@ -15,11 +7,39 @@ interface EmailOptions {
 }
 
 export async function sendEmail(options: EmailOptions) {
+  const recipients = Array.isArray(options.to) ? options.to : [options.to]
+  if (process.env.RESEND_API_KEY) {
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from: process.env.EMAIL_FROM || 'CareConnect <onboarding@resend.dev>',
+          to: recipients,
+          subject: options.subject,
+          html: options.html,
+        }),
+      })
+      if (!response.ok) {
+        console.error('[Email Error] HTTPS provider rejected the message:', response.status)
+        return { success: false, error: `Email provider returned ${response.status}` }
+      }
+      const result = await response.json() as { id?: string }
+      return { success: true, messageId: result.id }
+    } catch (error) {
+      console.error('[Email Error] HTTPS provider request failed:', error)
+      return { success: false, error }
+    }
+  }
   if (!process.env.EMAIL_USER || process.env.EMAIL_USER === 'your-gmail@gmail.com') {
     console.log('[Email Mock] Would send:', { to: options.to, subject: options.subject })
     return { success: true, mock: true }
   }
   try {
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
+    })
     const info = await transporter.sendMail({
       from: process.env.EMAIL_FROM || `CareConnect <${process.env.EMAIL_USER}>`,
       to: Array.isArray(options.to) ? options.to.join(', ') : options.to,

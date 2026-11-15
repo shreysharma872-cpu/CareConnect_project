@@ -1,22 +1,41 @@
 const { spawn } = require('node:child_process')
+const { existsSync } = require('node:fs')
+const { join } = require('node:path')
 
 const production = process.argv.includes('--production')
 const isWindows = process.platform === 'win32'
 const root = process.cwd()
 const backendPort = Number(process.env.RUST_BACKEND_PORT || 4000)
 const backendUrl = process.env.RUST_BACKEND_URL || `http://127.0.0.1:${backendPort}`
-const shell = isWindows
+function findCargo() {
+  if (process.env.CARGO) return process.env.CARGO
+  if (isWindows) {
+    const cargoHome = process.env.CARGO_HOME || join(process.env.USERPROFILE || '', '.cargo')
+    const installedCargo = join(cargoHome, 'bin', 'cargo.exe')
+    if (existsSync(installedCargo)) return installedCargo
+  }
+  return 'cargo'
+}
+
+const cargo = findCargo()
+const frontendScript = production ? 'start:next' : 'dev:next'
+const npmCli = process.env.npm_execpath
+const cargoEnv = {
+  ...process.env,
+  CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR || join(root, 'target'),
+  CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS || '2',
+}
 
 let stopping = false
 let frontend = null
 let readinessTimer = null
 let readinessAttempts = 0
 
-const backend = spawn('cargo', ['run', ...(production ? ['--release'] : []), '--manifest-path', 'backend/Cargo.toml'], {
+const backend = spawn(cargo, ['run', ...(production ? ['--release'] : []), '--manifest-path', 'backend/Cargo.toml'], {
   cwd: root,
   stdio: 'inherit',
-  shell,
-  env: process.env,
+  shell: false,
+  env: cargoEnv,
 })
 
 function terminate(child) {
@@ -40,11 +59,15 @@ function stop(code = 0) {
 
 function startFrontend() {
   if (stopping || frontend) return
-  console.log(`[CareConnect] Rust API and SQLite are healthy at ${backendUrl}. Starting Next.js.`)
-  frontend = spawn('npm', ['run', production ? 'start:next' : 'dev:next'], {
+  console.log(`[CareConnect] Rust API and PostgreSQL are healthy at ${backendUrl}. Starting Next.js.`)
+  const command = npmCli ? process.execPath : (isWindows ? 'cmd.exe' : 'npm')
+  const args = npmCli
+    ? [npmCli, 'run', frontendScript]
+    : (isWindows ? ['/d', '/s', '/c', 'npm', 'run', frontendScript] : ['run', frontendScript])
+  frontend = spawn(command, args, {
     cwd: root,
     stdio: 'inherit',
-    shell,
+    shell: false,
     env: process.env,
   })
   frontend.on('error', error => {
@@ -80,7 +103,7 @@ async function waitForBackend() {
 }
 
 backend.on('error', error => {
-  console.error('Rust backend failed to start. Install Rust and ensure cargo is on PATH:', error.message)
+  console.error(`Rust backend failed to start with Cargo at "${cargo}". Install Rust or set CARGO to cargo.exe:`, error.message)
   stop(1)
 })
 backend.on('exit', code => {

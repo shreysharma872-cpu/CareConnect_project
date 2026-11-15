@@ -14,7 +14,7 @@ export async function runReminderChecks() {
   const patients = await db.execute('SELECT DISTINCT patient_id FROM medications WHERE active=1')
   for (const patient of patients.rows) await ensureDoseSchedule(db, String(patient.patient_id))
 
-  const caregiverJoin = `LEFT JOIN (SELECT patient_id,GROUP_CONCAT(DISTINCT email) AS caregiver_emails FROM authorized_users WHERE role IN ('admin','caretaker','family') GROUP BY patient_id) au ON au.patient_id=`
+  const caregiverJoin = `LEFT JOIN (SELECT patient_id,string_agg(DISTINCT email, ',') AS caregiver_emails FROM authorized_users WHERE role IN ('admin','caretaker','family') GROUP BY patient_id) au ON au.patient_id=`
   const upcoming = await db.execute({
     sql: `SELECT dl.*,m.name AS med_name,m.dosage,m.dosage_unit,p.name AS patient_name,p.email AS patient_email,au.caregiver_emails FROM dose_logs dl JOIN medications m ON dl.medication_id=m.id JOIN patients p ON dl.patient_id=p.id ${caregiverJoin}dl.patient_id WHERE dl.status='pending' AND dl.scheduled_time>? AND dl.scheduled_time<=? AND dl.reminder_sent=0 AND m.active=1`,
     args: [now.toISOString(), addMinutes(now, 30).toISOString()],

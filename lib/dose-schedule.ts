@@ -1,12 +1,12 @@
-import type { Client } from '@libsql/client'
+import type { DbClient, DbStatement } from './db'
 import { addDays, differenceInCalendarDays, isValid, parseISO, startOfDay } from 'date-fns'
 import { v4 as uuidv4 } from 'uuid'
 
 /** Keep a rolling 30-day window of scheduled doses for a patient's active medications. */
-export async function ensureDoseSchedule(db: Client, patientId: string) {
+export async function ensureDoseSchedule(db: DbClient, patientId: string) {
   const result = await db.execute({ sql: 'SELECT id,start_date,end_date,frequency,times FROM medications WHERE patient_id=? AND active=1', args: [patientId] })
   const today = startOfDay(new Date()), horizon = addDays(today, 29)
-  const statements: { sql: string; args: (string | number | null)[] }[] = []
+  const statements: DbStatement[] = []
 
   for (const medication of result.rows) {
     if (medication.frequency === 'As needed') continue
@@ -26,12 +26,12 @@ export async function ensureDoseSchedule(db: Client, patientId: string) {
         const [hours, minutes] = value.split(':').map(Number)
         const scheduled = new Date(day); scheduled.setHours(hours, minutes, 0, 0)
         statements.push({
-          sql: `INSERT OR IGNORE INTO dose_logs (id,medication_id,patient_id,scheduled_time,status) VALUES (?,?,?,?,'pending')`,
+          sql: `INSERT INTO dose_logs (id,medication_id,patient_id,scheduled_time,status) VALUES (?,?,?,?,'pending') ON CONFLICT (medication_id,scheduled_time) DO NOTHING`,
           args: [uuidv4(), String(medication.id), patientId, scheduled.toISOString()],
         })
       }
     }
   }
 
-  if (statements.length) await db.batch(statements, 'write')
+  if (statements.length) await db.batch(statements)
 }
