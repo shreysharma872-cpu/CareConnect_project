@@ -23,7 +23,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: CORS_ALLOWED_ORIGINS
-        value: https://careconnect-web.onrender.com
+        value: https://careconnect-web-oo98.onrender.com
 
   - type: web
     name: careconnect-web
@@ -32,7 +32,7 @@ services:
     staticPublishPath: ./out
     envVars:
       - key: NEXT_PUBLIC_API_BASE_URL
-        value: https://careconnect-api.onrender.com
+        value: https://careconnect-api-oo98.onrender.com
     headers:
       - path: /*
         name: X-Content-Type-Options
