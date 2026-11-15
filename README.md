@@ -123,6 +123,19 @@ Sign-in creates a seven-day, signed, HTTP-only session cookie. Production must s
 - **Database**: Local SQLite via `@libsql/client` (zero setup)
 - **Email**: Nodemailer + Gmail SMTP
 - **Auth**: bcrypt passcode hashing
+
+## Full-stack runtime
+
+This is a single Next.js application: `npm run dev` starts both the web UI and its backend API routes. The API initializes a local SQLite database at `DATABASE_PATH` on its first request; no separate database server or backend terminal is required. The database health endpoint at `/api/health` reports whether SQLite is connected.
+
+For a production self-hosted run:
+
+```bash
+npm run build
+npm run start
+```
+
+Set `SESSION_SECRET` and `CRON_SECRET` in the production environment before starting. Configure email SMTP values to deliver real reminders.
 =======
 # Elderly.Help_project
 project made for the betterment of the society, helping the society

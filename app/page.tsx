@@ -19,16 +19,26 @@ export default function HomePage() {
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
     setError(''); setLoading(true)
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 15000)
     try {
       const res = await fetch('/api/patients/auth', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ patientId: patientId.toUpperCase(), passcode }),
+        signal: controller.signal,
       })
       const data = await res.json()
-      if (!res.ok) { setError(data.error || 'Login failed'); setLoading(false); return }
+      if (!res.ok) { setError(data.error || 'Login failed'); return }
       localStorage.setItem('patient', JSON.stringify(data.patient))
-      router.push('/dashboard')
-    } catch { setError('Connection failed. Please try again.'); setLoading(false) }
+      router.replace('/dashboard')
+    } catch (error) {
+      setError(controller.signal.aborted
+        ? 'The server took too long to respond. Check that the app and database are running, then try again.'
+        : 'Could not connect to the server. Check that npm run dev is still running.')
+    } finally {
+      window.clearTimeout(timeout)
+      setLoading(false)
+    }
   }
 
   async function handleRegister(e: React.FormEvent) {
@@ -36,17 +46,27 @@ export default function HomePage() {
     if (regForm.passcode !== regForm.confirmPasscode) { setError('Passcodes do not match'); return }
     if (regForm.passcode.length < 4) { setError('Passcode must be at least 4 characters'); return }
     setError(''); setLoading(true)
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 15000)
     try {
       const res = await fetch('/api/patients', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(regForm),
+        signal: controller.signal,
       })
       const data = await res.json()
-      if (!res.ok) { setError(data.error || 'Registration failed'); setLoading(false); return }
+      if (!res.ok) { setError(data.error || 'Registration failed'); return }
       alert(`Profile created!\n\nYour Patient ID is: ${data.id}\n\nPlease save this ID — you need it to log in and to share access with family/caretakers.`)
       setPatientId(data.id)
       setMode('login')
-    } catch { setError('Connection failed.'); setLoading(false) }
+    } catch {
+      setError(controller.signal.aborted
+        ? 'The server took too long to respond. Check the database setup and try again.'
+        : 'Could not connect to the server. Check that npm run dev is still running.')
+    } finally {
+      window.clearTimeout(timeout)
+      setLoading(false)
+    }
   }
 
   const features = [
