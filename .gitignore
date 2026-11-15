@@ -5,6 +5,10 @@ coverage/
 *.db
 *.db-journal
 *.tsbuildinfo
+backend/target/
+backend/.cargo-home/
+.cargo/
+.rustup/
 .env*
 !.env.example
 npm-debug.log*
